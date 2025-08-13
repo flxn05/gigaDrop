@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Trippy 3D Universe v3</title>
+<style>
+  body { margin:0; overflow:hidden; background:black; }
+  .warning { position:absolute; top:20px; width:100%; text-align:center; font-size:1.5em; color:orange; font-weight:bold; z-index:10; }
+  button { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); padding:20px 40px; font-size:1.3em; cursor:pointer; background-color: darkorange; border:none; border-radius:12px; color:black; z-index:10; }
+</style>
+</head>
+<body>
+<div class="warning">WARNING: Trippy 3D universe ahead! Click to enter.</div>
+<button onclick="startUniverse()">Enter</button>
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+function startUniverse(){
+  document.querySelector('button').style.display='none';
+  document.querySelector('.warning').style.display='none';
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,10000);
+  camera.position.set(0,0,0);
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth,window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const light = new THREE.PointLight(0xffffff,2);
+  light.position.set(500,500,500);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x555555));
+
+  // Particle field
+  const particleCount = 8000;
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(particleCount*3);
+  const colors = new Float32Array(particleCount*3);
+  for(let i=0;i<particleCount;i++){
+    positions[i*3] = (Math.random()-0.5)*8000;
+    positions[i*3+1] = (Math.random()-0.5)*8000;
+    positions[i*3+2] = (Math.random()-0.5)*8000;
+    colors[i*3] = Math.random();
+    colors[i*3+1] = Math.random();
+    colors[i*3+2] = Math.random();
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors,3));
+  const material = new THREE.PointsMaterial({size:6, vertexColors:true, transparent:true, opacity:0.8});
+  const particles = new THREE.Points(geometry, material);
+  scene.add(particles);
+
+  // Pointer lock
+  document.body.requestPointerLock = document.body.requestPointerLock || document.body.mozRequestPointerLock;
+  document.body.onclick = () => { document.body.requestPointerLock(); };
+
+  let pitch=0, yaw=0;
+  document.addEventListener('mousemove', e=>{
+    if(document.pointerLockElement===document.body){
+      yaw -= e.movementX*0.002;
+      pitch -= e.movementY*0.002;
+    }
+  });
+
+  // Movement
+  const keys = {};
+  let lastWTime=0;
+  let speedMultiplier=1;
+  document.addEventListener('keydown', e=>{
+    const k=e.key.toLowerCase();
+    if(k==='w'){
+      const now = Date.now();
+      if(now-lastWTime<250) speedMultiplier=3; else speedMultiplier=1;
+      lastWTime=now;
+    }
+    keys[k]=true;
+  });
+  document.addEventListener('keyup', e=>{
+    keys[e.key.toLowerCase()]=false;
+    if(e.key.toLowerCase()==='w') speedMultiplier=1;
+  });
+
+  // Cinematic bosses
+  const bosses = [];
+  function spawnBoss(){
+    const size = 200+Math.random()*300;
+    const geo = new THREE.IcosahedronGeometry(size,2);
+    const mat = new THREE.MeshStandardMaterial({
+      color: Math.random()*0xffffff,
+      emissive: new THREE.Color(Math.random(),Math.random(),Math.random()),
+      roughness:0.2,
+      metalness:0.9
+    });
+    const boss = new THREE.Mesh(geo, mat);
+    boss.position.set((Math.random()-0.5)*4000,(Math.random()-0.5)*4000,(Math.random()-0.5)*4000);
+    scene.add(boss);
+    bosses.push({mesh:boss, exploded:false});
+  }
+  setInterval(spawnBoss,10000);
+
+  // Explosions
+  const explosionParticles = [];
+  function explode(obj){
+    const count=500;
+    for(let i=0;i<count;i++){
+      const pGeo = new THREE.SphereGeometry(2+Math.random()*4,3,2);
+      const pMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(Math.random(),Math.random(),Math.random()), emissive:0xffffff });
+      const p = new THREE.Mesh(pGeo,pMat);
+      p.position.copy(obj.position);
+      p.userData={velocity:new THREE.Vector3((Math.random()-0.5)*200,(Math.random()-0.5)*200,(Math.random()-0.5)*200)};
+      scene.add(p);
+      explosionParticles.push(p);
+    }
+  }
+
+  function animateExplosions(){
+    for(let i=explosionParticles.length-1;i>=0;i--){
+      const p = explosionParticles[i];
+      p.position.add(p.userData.velocity.clone().multiplyScalar(0.1));
+      p.userData.velocity.multiplyScalar(0.92);
+      if(p.userData.velocity.length()<0.1){
+        scene.remove(p);
+        explosionParticles.splice(i,1);
+      }
+    }
+  }
+
+  // Floating landscapes
+  const landscapes=[];
+  for(let i=0;i<10;i++){
+    const geo = new THREE.BoxGeometry(500+Math.random()*500,50+Math.random()*300,500+Math.random()*500);
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(Math.random(),Math.random(),Math.random()),
+      emissive: new THREE.Color(Math.random(),Math.random(),Math.random()),
+      roughness:0.4, metalness:0.6
+    });
+    const mesh = new THREE.Mesh(geo,mat);
+    mesh.position.set((Math.random()-0.5)*5000, (Math.random()-0.5)*5000, (Math.random()-0.5)*5000);
+    scene.add(mesh);
+    landscapes.push(mesh);
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+
+    // Camera rotation
+    const dir=new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch));
+    camera.lookAt(camera.position.clone().add(dir));
+
+    // Movement
+    const speed=15*speedMultiplier;
+    if(keys['w']) camera.position.add(dir.clone().multiplyScalar(speed));
+    if(keys['s']) camera.position.add(dir.clone().multiplyScalar(-speed));
+    if(keys['a']) camera.position.add(new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0),dir).normalize().multiplyScalar(speed));
+    if(keys['d']) camera.position.add(new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize().multiplyScalar(speed));
+
+    // Particle rotation
+    particles.rotation.y += 0.0005;
+    particles.rotation.x += 0.00025;
+
+    // Boss interaction
+    bosses.forEach(b=>{
+      if(!b.exploded && camera.position.distanceTo(b.mesh.position)<600){
+        explode(b.mesh);
+        scene.remove(b.mesh);
+        b.exploded=true;
+      }
+    });
+
+    animateExplosions();
+
+    // Particle color pulse
+    const time = Date.now()*0.001;
+    material.color.setHSL((Math.sin(time*0.3)+1)/2,1,0.5);
+
+    renderer.render(scene,camera);
+  }
+  animate();
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect=window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth,window.innerHeight);
+  });
+}
+</script>
+</body>
+</html>

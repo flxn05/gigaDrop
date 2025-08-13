@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Trippy 3D Universe</title>
+<style>
+  body { margin: 0; overflow: hidden; background: black; }
+  .warning {
+    position: absolute;
+    top: 20px;
+    width: 100%;
+    text-align: center;
+    font-size: 1.5em;
+    color: orange;
+    font-weight: bold;
+    z-index: 10;
+  }
+  button {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 20px 40px;
+    font-size: 1.3em;
+    cursor: pointer;
+    background-color: darkorange;
+    border: none;
+    border-radius: 12px;
+    color: black;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div class="warning">WARNING: Trippy 3D universe ahead! Click to enter.</div>
+<button onclick="startUniverse()">Enter</button>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+function startUniverse() {
+  document.querySelector('button').style.display = 'none';
+  document.querySelector('.warning').style.display = 'none';
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 10000);
+  camera.position.z = 0;
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Lights
+  const light = new THREE.PointLight(0xffffff, 2);
+  light.position.set(500, 500, 500);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x555555));
+
+  // Particle field
+  const particleCount = 8000;
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(particleCount*3);
+  const colors = new Float32Array(particleCount*3);
+
+  for(let i=0;i<particleCount;i++){
+    positions[i*3] = (Math.random()-0.5)*8000;
+    positions[i*3+1] = (Math.random()-0.5)*8000;
+    positions[i*3+2] = (Math.random()-0.5)*8000;
+    colors[i*3] = Math.random();
+    colors[i*3+1] = Math.random();
+    colors[i*3+2] = Math.random();
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors,3));
+
+  const material = new THREE.PointsMaterial({ size: 6, vertexColors: true, transparent:true, opacity:0.8});
+  const particles = new THREE.Points(geometry, material);
+  scene.add(particles);
+
+  // Surprises array
+  const surprises = [];
+  for(let s=0;s<3;s++){
+    const cluster = new THREE.Group();
+    const sphereGeo = new THREE.IcosahedronGeometry(80 + Math.random()*100, 2);
+    const sphereMat = new THREE.MeshStandardMaterial({ color: Math.random()*0xffffff, emissive: Math.random()*0xffffff, roughness:0.3, metalness:0.8 });
+    const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+    cluster.add(sphere);
+    cluster.position.set((Math.random()-0.5)*4000, (Math.random()-0.5)*4000, (Math.random()-0.5)*4000);
+    scene.add(cluster);
+    surprises.push({group: cluster, exploded:false});
+  }
+
+  // Keyboard + mouse controls
+  const keys = {};
+  document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+  document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+  let pitch = 0, yaw = 0;
+  document.addEventListener('mousemove', e => {
+    yaw -= (e.movementX||0) * 0.002;
+    pitch -= (e.movementY||0) * 0.002;
+    pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+  });
+
+  // Particle explosion function
+  function explode(cluster){
+    const explosionCount = 200;
+    for(let i=0;i<explosionCount;i++){
+      const pGeo = new THREE.SphereGeometry(2+Math.random()*4,3,2);
+      const pMat = new THREE.MeshBasicMaterial({ color: Math.random()*0xffffff });
+      const p = new THREE.Mesh(pGeo, pMat);
+      p.position.copy(cluster.position);
+      p.userData = { velocity: new THREE.Vector3((Math.random()-0.5)*50, (Math.random()-0.5)*50, (Math.random()-0.5)*50) };
+      scene.add(p);
+      explosionParticles.push(p);
+    }
+  }
+
+  const explosionParticles = [];
+  function animateExplosions(){
+    for(let i=explosionParticles.length-1;i>=0;i--){
+      const p = explosionParticles[i];
+      p.position.add(p.userData.velocity.clone().multiplyScalar(0.1));
+      p.userData.velocity.multiplyScalar(0.96); // friction
+      if(p.userData.velocity.length() < 0.1){
+        scene.remove(p);
+        explosionParticles.splice(i,1);
+      }
+    }
+  }
+
+  // Animate
+  function animate() {
+    requestAnimationFrame(animate);
+
+    // Camera rotation
+    const dir = new THREE.Vector3();
+    dir.set(
+      Math.sin(yaw)*Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw)*Math.cos(pitch)
+    );
+    camera.lookAt(camera.position.clone().add(dir));
+
+    // Movement
+    const speed = 15;
+    const forward = new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)).multiplyScalar(speed);
+    const right = new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw)).multiplyScalar(speed);
+    const up = new THREE.Vector3(0,1,0).multiplyScalar(speed);
+    if(keys['w']) camera.position.add(forward);
+    if(keys['s']) camera.position.sub(forward);
+    if(keys['a']) camera.position.sub(right);
+    if(keys['d']) camera.position.add(right);
+    if(keys['q']) camera.position.add(up);
+    if(keys['e']) camera.position.sub(up);
+
+    // Particle rotation
+    particles.rotation.y += 0.0005;
+    particles.rotation.x += 0.00025;
+
+    // Surprise interaction
+    surprises.forEach(s => {
+      if(!s.exploded && camera.position.distanceTo(s.group.position)<200){
+        explode(s.group);
+        scene.remove(s.group);
+        s.exploded = true;
+      }
+    });
+
+    animateExplosions();
+
+    // Color pulse
+    const time = Date.now()*0.001;
+    material.color.setHSL((Math.sin(time*0.3)+1)/2,1,0.5);
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+  // Resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+</script>
+
+</body>
+</html>

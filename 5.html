@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SkyFly Hyperspace Adventure</title>
+<style>
+  :root { --hud-bg: rgba(0,0,0,.35); --hud-br: 16px; }
+  html, body { height: 100%; }
+  body { margin: 0; overflow: hidden; background: #000; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #fff; }
+  /* Start Screen */
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(1200px 800px at 50% 40%, rgba(255,255,255,.06), rgba(0,0,0,.8) 60%);
+    z-index: 10;
+  }
+  .panel {
+    background: var(--hud-bg); border: 1px solid rgba(255,255,255,.15); border-radius: var(--hud-br);
+    padding: 24px 28px; backdrop-filter: blur(6px); text-align: center; max-width: 680px;
+    box-shadow: 0 20px 70px rgba(0,0,0,.6), inset 0 0 40px rgba(255,255,255,.06);
+  }
+  .title { font-weight: 800; font-size: 28px; letter-spacing: .5px; margin: 0 0 10px; }
+  .subtitle { opacity: .9; margin-top: 0; margin-bottom: 16px; }
+  .kbd { display: inline-block; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.2); margin: 0 4px; font-weight: 700; }
+  .btn {
+    appearance: none; border: 0; border-radius: 14px; padding: 14px 22px; font-weight: 800; letter-spacing: .5px;
+    background: linear-gradient(135deg, #ffe66d, #ff7eea 60%, #6df7ff);
+    color: #000; cursor: pointer; transition: transform .06s ease, filter .2s ease;
+    box-shadow: 0 12px 40px rgba(255,126,234,.26), inset 0 -6px 16px rgba(0,0,0,.25);
+  }
+  .btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+  .btn:active { transform: translateY(1px) scale(.99); }
+  /* HUD */
+  .hud {
+    position: fixed; top: 14px; left: 14px; z-index: 5; padding: 10px 14px;
+    background: var(--hud-bg); border: 1px solid rgba(255,255,255,.15); border-radius: var(--hud-br); backdrop-filter: blur(6px);
+    font-weight: 700; letter-spacing: .3px;
+  }
+  .hud .row { display: flex; gap: 12px; align-items: center; }
+  .hud .dot { width: 10px; height: 10px; border-radius: 50%; background: #6df7ff; box-shadow: 0 0 10px 2px #6df7ff; }
+  .hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 5;
+    background: var(--hud-bg); border: 1px solid rgba(255,255,255,.15); border-radius: var(--hud-br);
+    padding: 10px 14px; backdrop-filter: blur(6px); font-size: 14px; opacity: .85;
+  }
+  .flash {
+    position: fixed; inset: 0; background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.9), rgba(255,255,255,0) 60%);
+    pointer-events: none; opacity: 0; transition: opacity .25s ease; z-index: 7;
+  }
+  .flash.show { opacity: .8; }
+</style>
+</head>
+<body>
+
+<!-- HUD -->
+<div class="hud">
+  <div class="row"><div class="dot"></div> <div>Score: <span id="score">0</span></div></div>
+</div>
+<div class="hint">WASD move • Mouse look (auto Pointer Lock) • Double‑tap W = Boost • Fly into bosses to destroy • Hyperspace tunnels give a speed burst</div>
+<div class="flash" id="flash"></div>
+
+<!-- Start Overlay -->
+<div class="overlay" id="overlay">
+  <div class="panel">
+    <h1 class="title">SkyFly Hyperspace Adventure</h1>
+    <p class="subtitle">Fly a boundless neon cosmos. Destroy animated bosses. Dive through hyperspace tunnels. Chase the highest score.</p>
+    <p>
+      <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> move
+      &nbsp;•&nbsp; Mouse to look (no screen‑edge lock)
+      &nbsp;•&nbsp; Double‑tap <span class="kbd">W</span> to boost
+      &nbsp;•&nbsp; <span class="kbd">Space</span> to start
+    </p>
+    <button class="btn" id="playBtn">PLAY</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+(() => {
+  // ---------- Setup ----------
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 20000);
+  camera.position.set(0, 0, 0);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0x555555));
+  const keyLight = new THREE.PointLight(0xffffff, 1.6, 0, 2);
+  keyLight.position.set(500, 600, 800);
+  scene.add(keyLight);
+
+  // Mild fog for depth
+  scene.fog = new THREE.FogExp2(0x000010, 0.00018);
+
+  // ---------- Starfield (background points) ----------
+  const starGeo = new THREE.BufferGeometry();
+  const starCount = 9000, starPos = new Float32Array(starCount * 3), starCol = new Float32Array(starCount * 3);
+  for (let i = 0; i < starCount; i++) {
+    starPos[i*3]   = (Math.random() - .5) * 16000;
+    starPos[i*3+1] = (Math.random() - .5) * 16000;
+    starPos[i*3+2] = (Math.random() - .5) * 16000;
+    const c = 0.6 + Math.random() * 0.4;
+    starCol[i*3] = c; starCol[i*3+1] = c; starCol[i*3+2] = 1;
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+  starGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
+  const starMat = new THREE.PointsMaterial({ size: 6, sizeAttenuation: true, vertexColors: true, transparent: true, opacity: .85 });
+  const stars = new THREE.Points(starGeo, starMat);
+  scene.add(stars);
+
+  // ---------- Helper: make a repeating canvas texture ----------
+  function makeStripeTexture({w=256,h=256, streaks=20}) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0,0,w,h);
+    for (let i=0;i<streaks;i++) {
+      const x = Math.random()*w;
+      const width = 1 + Math.random()*3;
+      const grd = g.createLinearGradient(x, 0, x+width, h);
+      const hue = Math.floor(Math.random()*360);
+      grd.addColorStop(0, `hsla(${hue},100%,70%,.0)`);
+      grd.addColorStop(.2, `hsla(${(hue+20)%360},100%,70%,.8)`);
+      grd.addColorStop(.5, `hsla(${(hue+40)%360},100%,80%,1)`);
+      grd.addColorStop(.8, `hsla(${(hue+20)%360},100%,70%,.8)`);
+      grd.addColorStop(1, `hsla(${hue},100%,70%,.0)`);
+      g.fillStyle = grd;
+      g.fillRect(x, 0, width, h);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = 8;
+    return tex;
+  }
+
+  // ---------- Hyperspace Warp Tunnels ----------
+  const warpTunnels = [];
+  const warpTexture = makeStripeTexture({w:512,h:512,streaks:60});
+  function spawnWarpTunnel() {
+    // Place a long cylinder ahead of camera, aligned with current view
+    const length = 4000, radius = 220 + Math.random()*120;
+    const geo = new THREE.CylinderGeometry(radius, radius, length, 32, 1, true);
+    const mat = new THREE.MeshBasicMaterial({
+      side: THREE.BackSide, map: warpTexture, transparent: true, opacity: 0.85
+    });
+    const tunnel = new THREE.Mesh(geo, mat);
+    // Position 2-4k units ahead
+    const dir = getLookDir();
+    const pos = camera.position.clone().add(dir.clone().multiplyScalar(2500 + Math.random()*1500));
+    tunnel.position.copy(pos);
+    // Orient cylinder along dir
+    tunnel.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
+    // Random texture tiling
+    mat.map.repeat.set(8, 30);
+    scene.add(tunnel);
+    warpTunnels.push({mesh: tunnel, scroll: 0});
+  }
+  // Spawn tunnels occasionally
+  let nextTunnelTime = performance.now() + 6000 + Math.random()*6000;
+
+  // ---------- Landscapes: varied shapes, scattered ----------
+  const landscape = new THREE.Group();
+  scene.add(landscape);
+  const shapes = ['box', 'ico', 'torus', 'arch', 'crystal'];
+  function spawnLandscape(count=40) {
+    for (let i=0;i<count;i++) {
+      const type = shapes[Math.floor(Math.random()*shapes.length)];
+      let mesh, mat;
+      const color = new THREE.Color().setHSL(Math.random(), 0.8, 0.6);
+      const emit  = new THREE.Color().setHSL((Math.random()*360|0)/360, 1.0, 0.6);
+      mat = new THREE.MeshStandardMaterial({ color, emissive: emit, metalness: .6, roughness: .35 });
+
+      switch(type) {
+        case 'box': {
+          const g = new THREE.BoxGeometry(300+Math.random()*700, 60+Math.random()*300, 300+Math.random()*700);
+          mesh = new THREE.Mesh(g, mat);
+          break;
+        }
+        case 'ico': {
+          const g = new THREE.IcosahedronGeometry(150+Math.random()*350, 1+Math.floor(Math.random()*2));
+          mesh = new THREE.Mesh(g, mat);
+          break;
+        }
+        case 'torus': {
+          const g = new THREE.TorusGeometry(200+Math.random()*300, 40+Math.random()*80, 12, 64);
+          mesh = new THREE.Mesh(g, mat);
+          break;
+        }
+        case 'arch': {
+          // big ring/arch to fly through
+          const g = new THREE.TorusGeometry(400+Math.random()*500, 60+Math.random()*90, 14, 80);
+          mesh = new THREE.Mesh(g, mat);
+          break;
+        }
+        case 'crystal': {
+          const g = new THREE.ConeGeometry(80+Math.random()*160, 200+Math.random()*400, 5+Math.floor(Math.random()*5));
+          mesh = new THREE.Mesh(g, mat);
+          break;
+        }
+      }
+      mesh.position.set(
+        (Math.random()-0.5)*14000,
+        (Math.random()-0.5)*14000,
+        (Math.random()-0.5)*14000
+      );
+      mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+      mesh.castShadow = mesh.receiveShadow = false;
+      landscape.add(mesh);
+    }
+  }
+  spawnLandscape(60);
+
+  // ---------- Bosses: animated textured clusters ----------
+  const bosses = [];
+  const bossBaseTex = makeStripeTexture({w:512, h:512, streaks:40}); // reused & animated via offset
+  function spawnBoss() {
+    // Random position in a spherical shell around the player
+    const dir = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+    const dist = 2000 + Math.random()*6000;
+    const pos  = camera.position.clone().add(dir.multiplyScalar(dist));
+
+    // Boss geometry: layered icosahedrons + ring
+    const group = new THREE.Group();
+    const size = 200 + Math.random()*260;
+
+    const g1 = new THREE.IcosahedronGeometry(size, 2);
+    const m1 = new THREE.MeshStandardMaterial({
+      map: bossBaseTex, color: 0xffffff, emissive: new THREE.Color().setHSL(Math.random(),1,.5),
+      metalness: .9, roughness: .2
+    });
+    const core = new THREE.Mesh(g1, m1);
+
+    const g2 = new THREE.IcosahedronGeometry(size*0.65, 1);
+    const m2 = new THREE.MeshStandardMaterial({
+      map: bossBaseTex, color: 0xffffff, emissive: new THREE.Color().setHSL(Math.random(),1,.6),
+      metalness: .95, roughness: .15, transparent: true, opacity: .9
+    });
+    const inner = new THREE.Mesh(g2, m2);
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(size*0.9, size*0.06, 12, 64),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x66ccff, metalness: .7, roughness: .2 })
+    );
+
+    group.add(core, inner, ring);
+    group.position.copy(pos);
+    group.userData = { exploded: false, t: Math.random()*1000 };
+    scene.add(group);
+    bosses.push(group);
+  }
+  // Spawn bosses frequently and randomly
+  let nextBossTime = performance.now() + 2500 + Math.random()*2500;
+
+  // ---------- Explosions: GPU‑friendly Points with velocities ----------
+  const explosionSystems = [];
+  function spawnExplosion(position, magnitude = 1) {
+    const count = Math.floor(600 * magnitude);
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(count*3);
+    const vel = new Float32Array(count*3);
+    const col = new Float32Array(count*3);
+    const life = new Float32Array(count);
+
+    for (let i=0;i<count;i++) {
+      // Start at position
+      pos[i*3] = position.x; pos[i*3+1] = position.y; pos[i*3+2] = position.z;
+      // Velocity: spherical
+      const v = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize()
+                .multiplyScalar(40 + Math.random()*160 * magnitude);
+      vel[i*3] = v.x; vel[i*3+1] = v.y; vel[i*3+2] = v.z;
+      // Color gradient
+      const hue = Math.random()*360;
+      const c = new THREE.Color().setHSL(hue/360, 1, 0.6 + Math.random()*0.2);
+      col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+      life[i] = 1.0 + Math.random()*0.8;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('velocity', new THREE.BufferAttribute(vel,3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col,3));
+    geo.setAttribute('life', new THREE.BufferAttribute(life,1));
+
+    const mat = new THREE.PointsMaterial({ size: 10, vertexColors: true, transparent: true, opacity: 1 });
+    const points = new THREE.Points(geo, mat);
+    points.userData = { birth: performance.now(), mat };
+    scene.add(points);
+    explosionSystems.push(points);
+
+    // Screen flash
+    const flash = document.getElementById('flash');
+    flash.classList.add('show');
+    setTimeout(()=>flash.classList.remove('show'), 120);
+  }
+
+  // ---------- Controls ----------
+  const keys = {};
+  let pitch = 0, yaw = 0;
+  let speedBase = 24, speedMult = 1, boostUntil = 0;
+  let lastWTime = 0;
+
+  function getLookDir() {
+    return new THREE.Vector3(
+      Math.sin(yaw)*Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw)*Math.cos(pitch)
+    ).normalize();
+  }
+
+  function onKeyDown(e) {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+
+    if (k === ' ' && overlayVisible) startGame();
+    if (k === 'w') {
+      const now = performance.now();
+      if (now - lastWTime < 250) { // double tap
+        speedMult = 3.2;
+        boostUntil = now + 1600;
+      }
+      lastWTime = now;
+    }
+  }
+  function onKeyUp(e) {
+    keys[e.key.toLowerCase()] = false;
+  }
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+
+  // Pointer lock for relative mouse
+  function lockPointer() {
+    const elem = document.body;
+    (elem.requestPointerLock || elem.mozRequestPointerLock || elem.webkitRequestPointerLock).call(elem);
+  }
+  document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement === document.body) {
+      yaw   -= e.movementX * 0.0022;
+      pitch -= e.movementY * 0.0022;
+      // Allow nearly full up/down without weird flip
+      const lim = Math.PI/2 * 0.995;
+      pitch = Math.max(-lim, Math.min(lim, pitch));
+    }
+  });
+
+  // ---------- Game State ----------
+  let started = false, overlayVisible = true, score = 0;
+  const overlay = document.getElementById('overlay');
+  const playBtn = document.getElementById('playBtn');
+  const scoreEl = document.getElementById('score');
+
+  function startGame() {
+    if (started) return;
+    overlayVisible = false;
+    overlay.style.display = 'none';
+    started = true;
+    lockPointer();
+  }
+  playBtn.addEventListener('click', startGame);
+
+  // ---------- Main Loop ----------
+  const tmpVec = new THREE.Vector3();
+  let lastTime = performance.now();
+
+  function animate(now) {
+    requestAnimationFrame(animate);
+    const dt = Math.min(0.05, (now - lastTime) / 1000); // clamp dt for stability
+    lastTime = now;
+
+    // Gentle starfield motion
+    stars.rotation.y += 0.0001;
+
+    // Movement
+    if (started) {
+      const dir = getLookDir();
+      const right = tmpVec.set(dir.z, 0, -dir.x).normalize();
+      const up    = new THREE.Vector3(0,1,0);
+
+      let curSpeed = speedBase * speedMult;
+      if (now > boostUntil) speedMult = 1;
+
+      if (keys['w']) camera.position.addScaledVector(dir,  curSpeed);
+      if (keys['s']) camera.position.addScaledVector(dir, -curSpeed);
+      if (keys['a']) camera.position.addScaledVector(right, -curSpeed);
+      if (keys['d']) camera.position.addScaledVector(right,  curSpeed);
+
+      // Subtle camera look target
+      camera.lookAt(camera.position.clone().add(dir));
+    }
+
+    // Boss spawn cadence
+    if (now > nextBossTime) {
+      spawnBoss();
+      nextBossTime = now + (2000 + Math.random()*3000); // frequent & random
+    }
+
+    // Warp tunnel spawn cadence
+    if (now > nextTunnelTime) {
+      spawnWarpTunnel();
+      nextTunnelTime = now + (7000 + Math.random()*9000);
+    }
+
+    // Animate bosses & check proximity explosions
+    for (let i = bosses.length - 1; i >= 0; i--) {
+      const b = bosses[i];
+      if (!b) continue;
+      b.userData.t += dt;
+      // Animate their textures and motion
+      b.children.forEach((m, idx) => {
+        if (m.material && m.material.map) {
+          m.material.map.offset.y += (0.15 + idx*0.05) * dt;
+          m.material.map.offset.x += Math.sin(b.userData.t*0.5 + idx)*0.03*dt;
+        }
+      });
+      b.rotation.x += 0.003;
+      b.rotation.y -= 0.004;
+
+      const dist = camera.position.distanceTo(b.position);
+      if (!b.userData.exploded && dist < 850) {
+        b.userData.exploded = true;
+        spawnExplosion(b.position, 1.3);
+        scene.remove(b);
+        bosses.splice(i, 1);
+        score += 1;
+        scoreEl.textContent = score;
+      }
+    }
+
+    // Animate warp tunnels (scroll texture; check fly-through)
+    for (let i = warpTunnels.length - 1; i >= 0; i--) {
+      const w = warpTunnels[i];
+      if (!w) continue;
+      w.scroll += dt * 2.5;
+      const mat = w.mesh.material;
+      if (mat.map) {
+        mat.map.offset.y -= dt * 6.0; // lines rushing by
+      }
+      // If close to center of tunnel, give a burst
+      const center = w.mesh.position;
+      const dist = camera.position.distanceTo(center);
+      if (dist < 240) {
+        speedMult = 3.6;
+        boostUntil = now + 1800;
+        // burst vfx
+        spawnExplosion(center, 1.0);
+        scene.remove(w.mesh);
+        warpTunnels.splice(i, 1);
+      }
+      // Remove if far behind
+      if (dist > 7000) {
+        scene.remove(w.mesh);
+        warpTunnels.splice(i, 1);
+      }
+    }
+
+    // Animate explosions (Points with velocity & fade)
+    for (let i = explosionSystems.length - 1; i >= 0; i--) {
+      const p = explosionSystems[i];
+      const geo = p.geometry;
+      const pos = geo.attributes.position.array;
+      const vel = geo.attributes.velocity.array;
+      const life= geo.attributes.life.array;
+
+      let alive = false;
+      for (let j=0; j<life.length; j++) {
+        if (life[j] > 0) {
+          // update
+          const ix = j*3;
+          pos[ix]   += vel[ix]   * dt;
+          pos[ix+1] += vel[ix+1] * dt;
+          pos[ix+2] += vel[ix+2] * dt;
+          // drag
+          vel[ix]   *= (1 - 0.9*dt);
+          vel[ix+1] *= (1 - 0.9*dt);
+          vel[ix+2] *= (1 - 0.9*dt);
+          life[j]   -= 0.6 * dt;
+          alive = true;
+        }
+      }
+      p.material.opacity = Math.max(0, Math.min(1, life.reduce((a,b)=>a+b,0) / life.length));
+      geo.attributes.position.needsUpdate = true;
+      if (!alive || p.material.opacity < 0.03) {
+        scene.remove(p);
+        explosionSystems.splice(i,1);
+      }
+    }
+
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(animate);
+
+  // ---------- Resize ----------
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  // ---------- Start screen interactions ----------
+  // Also start with Space
+  window.addEventListener('keydown', (e) => {
+    if (!started && e.code === 'Space') startGame();
+  });
+})();
+</script>
+</body>
+</html>
