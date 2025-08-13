@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SkyFly Hyperspace Adventure — Enhanced</title>
+<style>
+  :root { --hud-bg: rgba(0,0,0,.35); --hud-br: 14px; }
+  html,body { height:100%; margin:0; background:#000; color:#fff; font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; }
+  canvas { display:block; }
+
+  /* HUD */
+  .hud { position:fixed; top:12px; left:12px; z-index:7; padding:10px 12px; background:var(--hud-bg); border-radius:var(--hud-br); border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(6px); font-weight:700; }
+  .hud .row { display:flex; gap:12px; align-items:center; }
+  .hud .dot { width:10px; height:10px; border-radius:50%; background:#6df7ff; box-shadow:0 0 10px 2px #6df7ff; }
+
+  .hint { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); z-index:7; background:var(--hud-bg); padding:10px 14px; border-radius:var(--hud-br); border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(6px); font-size:13px; opacity:.92; }
+
+  .flash { position:fixed; inset:0; pointer-events:none; z-index:8; opacity:0; transition:opacity .18s ease; }
+  .flash.show { opacity:.9; background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.9), rgba(255,255,255,0) 60%); }
+
+  /* overlays */
+  .overlay, .pauseOverlay, .pointerLost {
+    position:fixed; inset:0; display:grid; place-items:center; z-index:10;
+    background:linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.7));
+  }
+  .overlay .panel, .pauseOverlay .panel, .pointerLost .panel {
+    background: rgba(0,0,0,.45); border-radius:16px; padding:20px 28px; text-align:center; border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(8px);
+    box-shadow:0 20px 70px rgba(0,0,0,.6);
+    max-width:720px;
+  }
+  .title { font-size:26px; font-weight:800; margin:0 0 6px; }
+  .subtitle { margin:0 0 12px; opacity:.95; }
+  .controls { margin:6px 0 12px; color:#ddd; }
+  .kbd { display:inline-block; padding:4px 8px; border-radius:8px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); font-weight:700; margin:0 4px; }
+
+  .btn { appearance:none; border:0; border-radius:12px; padding:12px 18px; background:linear-gradient(135deg,#ffe66d,#ff7eea); font-weight:800; color:#000; cursor:pointer; margin-top:8px; }
+  .btn.secondary { background:rgba(255,255,255,.06); color:#fff; border:1px solid rgba(255,255,255,.12); }
+  select { padding:8px 10px; border-radius:10px; background:rgba(255,255,255,.04); color:#fff; border:1px solid rgba(255,255,255,.08); }
+
+  /* big +points popup */
+  .pointsPopup {
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) scale(0.9); pointer-events:none; z-index:9;
+    font-size:48px; font-weight:900; color:#fff; text-shadow:0 6px 30px rgba(0,0,0,.6);
+    opacity:0; transition: transform .35s cubic-bezier(.2,.9,.2,1), opacity .35s ease;
+  }
+  .pointsPopup.show { opacity:1; transform:translate(-50%,-50%) scale(1.06); }
+
+  /* pointer-lost overlay */
+  .pointerLost { display:none; }
+  .pointerLost .panel { max-width:480px; }
+
+  /* small footer */
+  .footer { position:fixed; right:12px; bottom:12px; z-index:7; background:var(--hud-bg); padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,.08); font-size:12px; opacity:.9; }
+</style>
+</head>
+<body>
+<div class="hud">
+  <div class="row"><div class="dot"></div><div>Score: <span id="hudScore">0</span></div><div style="opacity:.8;">| Best: <span id="hudBest">0</span></div></div>
+</div>
+<div class="hint">WASD move • Mouse look (Pointer Lock) • Double-tap W = Boost • Space = Pause • Click center if pointer lost</div>
+<div id="flash" class="flash"></div>
+<div id="pointsPopup" class="pointsPopup">+500</div>
+
+<!-- Start overlay -->
+<div id="startOverlay" class="overlay">
+  <div class="panel">
+    <div class="title">SkyFly Hyperspace Adventure</div>
+    <div class="subtitle">Choose a track, then fly through a neon cosmos. Your best score is saved automatically.</div>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-bottom:8px;">
+      <label style="color:#ccc;">Music:
+        <select id="musicSelect">
+          <option value="Mystery.mp3">Mystery</option>
+          <option value="Piano_Atmosphere.mp3">Piano Atmosphere</option>
+          <option value="Theme1.mp3">Theme 1</option>
+          <option value="Theme2.mp3">Theme 2</option>
+          <option value="Tragedy.mp3">Tragedy</option>
+        </select>
+      </label>
+    </div>
+    <div style="margin-bottom:10px;">Current score: <strong id="startCur">0</strong> &nbsp; • &nbsp; Best: <strong id="startBest">0</strong></div>
+    <div class="controls">WASD to move • mouse to look • double-tap W for boost • Press Space or click Play</div>
+    <div style="display:flex;gap:12px;justify-content:center;">
+      <button id="playBtn" class="btn">PLAY</button>
+      <button id="resetBtn" class="btn secondary">Reset Best</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pause overlay -->
+<div id="pauseOverlay" class="pauseOverlay overlay" style="display:none;">
+  <div class="panel">
+    <div class="title">Paused</div>
+    <div class="subtitle">Take a break — audio SFX are muted while paused.</div>
+    <div style="margin-bottom:10px;">Current score: <strong id="pauseCur">0</strong> &nbsp; • &nbsp; Best: <strong id="pauseBest">0</strong></div>
+    <div style="display:flex;gap:12px;justify-content:center;">
+      <button id="resumeBtn" class="btn">RESUME</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pointer lock lost overlay -->
+<div id="pointerLost" class="pointerLost overlay">
+  <div class="panel">
+    <div class="title">Pointer lost</div>
+    <div class="subtitle">Click anywhere to regain mouse control and continue playing.</div>
+    <div style="margin-top:6px;"><button id="pointerRelock" class="btn">Click to re-lock</button></div>
+  </div>
+</div>
+
+<div class="footer">SkyFly — autosave enabled</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+/* ============================
+   Configuration & Constants
+   ============================ */
+const SFX_VOLUME_MULTIPLIER = 0.55;    // reduce overall SFX loudness
+const MUSIC_VOLUME = 0.72;
+const MENU_MUSIC_VOLUME = 0.6;
+const AMBIENT_INTERVAL = 30000; // ms
+const AUTO_SAVE_INTERVAL = 5000; // ms
+const STORAGE_KEY_BEST = 'skyfly_best_score_v1';
+const STORAGE_KEY_LAST = 'skyfly_last_score_v1';
+
+/* ============================
+   Audio System (WebAudio)
+   ============================ */
+let audioCtx = null;
+function ensureAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+
+const audioBuffers = {};
+async function loadAudio(path) {
+  ensureAudio();
+  const res = await fetch(path);
+  const buf = await res.arrayBuffer();
+  return audioCtx.decodeAudioData(buf);
+}
+
+async function preloadAudio() {
+  const files = [
+    'menu/Eerie.mp3',
+    'music/Mystery.mp3',
+    'music/Piano_Atmosphere.mp3',
+    'music/Theme1.mp3',
+    'music/Theme2.mp3',
+    'music/Tragedy.mp3',
+    'ambient/alienNoise.mp3',
+    'ambient/UfoSoundRandom.mp3',
+    'sfx/warpTunnel.mp3',
+    'sfx/movingAround.mp3',
+    'sfx/impactObject.mp3',
+    'sfx/bossExplosion.mp3',
+    'sfx/bossExplosion2.mp3'
+  ];
+  await Promise.all(files.map(async f => {
+    try { audioBuffers[f] = await loadAudio('sounds/' + f); } catch(e){ console.warn('Audio load failed:', f, e); }
+  }));
+}
+
+// playBuffer helper returns an object to stop it
+function playBuffer(file, { loop=false, volume=1.0, pan=0, fadeIn=0.1 } = {}) {
+  if (!audioBuffers[file]) return null;
+  const src = audioCtx.createBufferSource();
+  src.buffer = audioBuffers[file];
+  const gain = audioCtx.createGain();
+  const panner = new StereoPannerNode(audioCtx, { pan: pan });
+
+  gain.gain.value = 0;
+  src.connect(panner).connect(gain).connect(audioCtx.destination);
+  src.loop = loop;
+  src.start(0);
+  // target volume scaled by global settings
+  gain.gain.linearRampToValueAtTime(volume, audioCtx.currentTime + Math.max(0.01, fadeIn));
+  return { src, gain, stop: (fadeOut=0.2) => {
+    try { gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + fadeOut); setTimeout(()=>{ try{ src.stop(); }catch(e){} }, (fadeOut+0.02)*1000); } catch(e){} } };
+}
+
+/* Master music and sfx controllers */
+let menuMusicObj = null, gameMusicObj = null;
+let ambientTimers = [];
+let movementSfxObj = null;
+let sfxMuted = false;
+
+function startMenuMusic() {
+  stopMenuMusic();
+  if (!audioBuffers['menu/Eerie.mp3']) return;
+  menuMusicObj = playBuffer('menu/Eerie.mp3', { loop:true, volume:MENU_MUSIC_VOLUME });
+}
+function stopMenuMusic() { if (menuMusicObj) { menuMusicObj.stop(0.6); menuMusicObj = null; } }
+
+function startGameMusic(trackFile) {
+  stopGameMusic();
+  if (!audioBuffers['music/' + trackFile]) return;
+  gameMusicObj = playBuffer('music/' + trackFile, { loop:true, volume:MUSIC_VOLUME });
+}
+function stopGameMusic() { if (gameMusicObj) { gameMusicObj.stop(0.6); gameMusicObj = null; } }
+
+function startAmbient() {
+  stopAmbient();
+  // schedule slightly offset timers so they don't always collide
+  ambientTimers.push(setInterval(()=>{ if(!sfxMuted) playSpatial('ambient/alienNoise.mp3', 0.55 * SFX_VOLUME_MULTIPLIER); }, AMBIENT_INTERVAL));
+  ambientTimers.push(setInterval(()=>{ if(!sfxMuted) playSpatial('ambient/UfoSoundRandom.mp3', 0.5 * SFX_VOLUME_MULTIPLIER); }, AMBIENT_INTERVAL + 11000));
+}
+function stopAmbient(){ ambientTimers.forEach(t=>clearInterval(t)); ambientTimers = []; }
+
+function playSpatial(file, volume=1.0) {
+  if (!audioBuffers[file] || sfxMuted) return null;
+  // random small pan and distance effect
+  const pan = (Math.random()*2)-1;
+  const distance = 0.6 + Math.random()*1.6;
+  const adjVol = Math.max(0, Math.min(1, volume / distance));
+  const obj = playBuffer(file, { loop:false, volume:adjVol });
+  if (obj && obj.gain) {
+    // reduce SFX global
+    obj.gain.gain.setValueAtTime(adjVol * SFX_VOLUME_MULTIPLIER, audioCtx.currentTime + 0.001);
+  }
+  return obj;
+}
+
+/* Movement SFX management: only one loop started while moving */
+function startMovementSfxIfNeeded() {
+  if (sfxMuted) return;
+  if (movementSfxObj) return;
+  if (!audioBuffers['sfx/movingAround.mp3']) return;
+  movementSfxObj = playBuffer('sfx/movingAround.mp3', { loop:true, volume:0.8 * SFX_VOLUME_MULTIPLIER });
+}
+function stopMovementSfx() { if (movementSfxObj) { movementSfxObj.stop(0.08); movementSfxObj = null; } }
+
+/* General one-shot SFX */
+function sfxWarp(){ playSpatial('sfx/warpTunnel.mp3', 0.9); }
+function sfxImpact(){ playSpatial('sfx/impactObject.mp3', 0.85); }
+function sfxBoss(){ const pick = Math.random()<0.5 ? 'sfx/bossExplosion.mp3' : 'sfx/bossExplosion2.mp3'; playSpatial(pick, 1.0); }
+
+/* ============================
+   Persistent Score & Autosave
+   ============================ */
+let currentScore = 0;
+let bestScore = 0;
+function loadBest() {
+  const b = localStorage.getItem(STORAGE_KEY_BEST);
+  bestScore = b ? parseInt(b,10) : 0;
+  const last = localStorage.getItem(STORAGE_KEY_LAST);
+  currentScore = last ? parseInt(last,10) : 0;
+}
+function saveBest() { localStorage.setItem(STORAGE_KEY_BEST, String(bestScore)); localStorage.setItem(STORAGE_KEY_LAST, String(currentScore)); }
+function updateScoreDisplay() {
+  document.getElementById('hudScore').textContent = currentScore;
+  document.getElementById('hudBest').textContent = bestScore;
+  document.getElementById('startCur').textContent = currentScore;
+  document.getElementById('startBest').textContent = bestScore;
+  document.getElementById('pauseCur').textContent = currentScore;
+  document.getElementById('pauseBest').textContent = bestScore;
+}
+function addScore(points) {
+  currentScore += points;
+  if (currentScore > bestScore) bestScore = currentScore;
+  updateScoreDisplay();
+  saveBest(); // immediate save on change (autosave)
+  showPointsPopup('+' + points);
+}
+
+/* Autosave periodically */
+setInterval(()=>{ saveBest(); }, AUTO_SAVE_INTERVAL);
+window.addEventListener('beforeunload', ()=>{ saveBest(); });
+
+/* Reset best */
+document.addEventListener('DOMContentLoaded', () => {
+  loadBest();
+  updateScoreDisplay();
+});
+
+/* ============================
+   UI elements
+   ============================ */
+const startOverlay = document.getElementById('startOverlay');
+const playBtn = document.getElementById('playBtn');
+const musicSelect = document.getElementById('musicSelect');
+const pauseOverlay = document.getElementById('pauseOverlay');
+const resumeBtn = document.getElementById('resumeBtn');
+const pointerLost = document.getElementById('pointerLost');
+const pointerRelock = document.getElementById('pointerRelock');
+const resetBtn = document.getElementById('resetBtn');
+
+resetBtn.addEventListener('click', ()=>{ bestScore=0; currentScore=0; saveBest(); updateScoreDisplay(); });
+
+playBtn.addEventListener('click', () => { startGame(); });
+resumeBtn.addEventListener('click', () => { togglePause(); });
+pointerRelock.addEventListener('click', () => { requestPointerLock(); pointerLost.style.display = 'none'; });
+document.getElementById('pointerLost').style.display = 'none';
+
+/* Points popup */
+const pointsPopup = document.getElementById('pointsPopup');
+let popupTimeout = null;
+function showPointsPopup(text) {
+  pointsPopup.textContent = text;
+  pointsPopup.classList.add('show');
+  if (popupTimeout) clearTimeout(popupTimeout);
+  popupTimeout = setTimeout(()=>{ pointsPopup.classList.remove('show'); }, 700);
+}
+
+/* ============================
+   Three.js Scene & Gameplay
+   ============================ */
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 20000);
+camera.position.set(0,0,0);
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0x555555));
+const keyLight = new THREE.PointLight(0xffffff, 1.6, 0, 2); keyLight.position.set(500,600,800); scene.add(keyLight);
+scene.fog = new THREE.FogExp2(0x000010, 0.00018);
+
+/* Starfield */
+const starGeo = new THREE.BufferGeometry();
+const starCount = 9000;
+const starPos = new Float32Array(starCount*3), starCol = new Float32Array(starCount*3);
+for (let i=0;i<starCount;i++){ starPos[i*3]=(Math.random()-.5)*16000; starPos[i*3+1]=(Math.random()-.5)*16000; starPos[i*3+2]=(Math.random()-.5)*16000; const c=0.6+Math.random()*0.4; starCol[i*3]=c; starCol[i*3+1]=c; starCol[i*3+2]=1; }
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos,3));
+starGeo.setAttribute('color', new THREE.BufferAttribute(starCol,3));
+const starMat = new THREE.PointsMaterial({ size:6, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:.85 });
+const stars = new THREE.Points(starGeo, starMat);
+scene.add(stars);
+
+/* Helpers to generate textures */
+function makeStripeTexture({w=512,h=512,streaks=40}) {
+  const c = document.createElement('canvas'); c.width=w; c.height=h; const g = c.getContext('2d');
+  g.fillStyle='#000'; g.fillRect(0,0,w,h);
+  for (let i=0;i<streaks;i++){ const x=Math.random()*w, width=1+Math.random()*3; const hue=(Math.random()*360)|0; const grd=g.createLinearGradient(x,0,x+width,h); grd.addColorStop(0,`hsla(${hue},100%,70%,0)`); grd.addColorStop(.2,`hsla(${(hue+20)%360},100%,70%,.8)`); grd.addColorStop(.5,`hsla(${(hue+40)%360},100%,80%,1)`); grd.addColorStop(.8,`hsla(${(hue+20)%360},100%,70%,.8)`); grd.addColorStop(1,`hsla(${hue},100%,70%,0)`); g.fillStyle=grd; g.fillRect(x,0,width,h); }
+  const tex=new THREE.CanvasTexture(c); tex.wrapS=tex.wrapT=THREE.RepeatWrapping; tex.anisotropy=8; return tex;
+}
+const bossBaseTex = makeStripeTexture({streaks:60});
+const warpTexture = makeStripeTexture({streaks:60});
+
+/* Warp tunnels */
+const warpTunnels = [];
+function getLookDir() { return new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch)).normalize(); }
+function spawnWarpTunnel() {
+  const length = 4000, radius = 220 + Math.random()*120;
+  const geo = new THREE.CylinderGeometry(radius, radius, length, 32, 1, true);
+  const mat = new THREE.MeshBasicMaterial({ side:THREE.BackSide, map:warpTexture, transparent:true, opacity:0.85 });
+  const tunnel = new THREE.Mesh(geo, mat);
+  const dir = getLookDir();
+  const pos = camera.position.clone().add(dir.clone().multiplyScalar(2500+Math.random()*1500));
+  tunnel.position.copy(pos);
+  tunnel.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+  mat.map.repeat.set(8, 30);
+  scene.add(tunnel);
+  warpTunnels.push({mesh:tunnel});
+}
+let nextTunnelTime = performance.now() + 7000 + Math.random()*9000;
+
+/* Landscapes */
+const landscape = new THREE.Group(); scene.add(landscape);
+const shapes = ['box','ico','torus','arch','crystal'];
+function spawnLandscape(count=70) {
+  for (let i=0;i<count;i++){
+    const type = shapes[Math.floor(Math.random()*shapes.length)];
+    const color = new THREE.Color().setHSL(Math.random(), 0.8, 0.6);
+    const emit = new THREE.Color().setHSL((Math.random()*360|0)/360,1,0.6);
+    const mat = new THREE.MeshStandardMaterial({ color, emissive:emit, metalness:.6, roughness:.35 });
+    let mesh;
+    if (type==='box') mesh = new THREE.Mesh(new THREE.BoxGeometry(300+Math.random()*700, 60+Math.random()*300, 300+Math.random()*700), mat);
+    if (type==='ico') mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(150+Math.random()*350, 1+Math.floor(Math.random()*2)), mat);
+    if (type==='torus') mesh = new THREE.Mesh(new THREE.TorusGeometry(200+Math.random()*300, 40+Math.random()*80, 12, 64), mat);
+    if (type==='arch') mesh = new THREE.Mesh(new THREE.TorusGeometry(400+Math.random()*500, 60+Math.random()*90, 14, 80), mat);
+    if (type==='crystal') mesh = new THREE.Mesh(new THREE.ConeGeometry(80+Math.random()*160, 200+Math.random()*400, 5+Math.floor(Math.random()*5)), mat);
+    mesh.position.set((Math.random()-.5)*14000, (Math.random()-.5)*14000, (Math.random()-.5)*14000);
+    mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+    mesh.userData.radius = type==='arch' ? 500 : 300;
+    landscape.add(mesh);
+  }
+}
+spawnLandscape(80);
+
+/* Bosses */
+const bosses = [];
+function spawnBoss() {
+  const dir = new THREE.Vector3(Math.random()-.5, Math.random()-.5, Math.random()-.5).normalize();
+  const dist = 2000 + Math.random()*6000;
+  const pos = camera.position.clone().add(dir.multiplyScalar(dist));
+  const group = new THREE.Group();
+  const size = 200 + Math.random()*260;
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(size,2), new THREE.MeshStandardMaterial({ map:bossBaseTex, color:0xffffff, emissive:new THREE.Color().setHSL(Math.random(),1,.5), metalness:.9, roughness:.2 }));
+  const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(size*0.65,1), new THREE.MeshStandardMaterial({ map:bossBaseTex, color:0xffffff, emissive:new THREE.Color().setHSL(Math.random(),1,.6), metalness:.95, roughness:.15, transparent:true, opacity:.9 }));
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(size*0.9, size*0.06, 12, 64), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0x66ccff, metalness:.7, roughness:.2 }));
+  group.add(core, inner, ring);
+  group.position.copy(pos);
+  group.userData = { exploded:false, t:Math.random()*1000, size };
+  scene.add(group); bosses.push(group);
+}
+let nextBossTime = performance.now() + 2500 + Math.random()*2500;
+
+/* Explosions (GPU friendly) */
+const explosionSystems = [];
+function spawnExplosion(position, magnitude=1) {
+  const count = Math.floor(600 * magnitude);
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count*3), vel = new Float32Array(count*3), col = new Float32Array(count*3), life = new Float32Array(count);
+  for (let i=0;i<count;i++){
+    pos[i*3] = position.x; pos[i*3+1] = position.y; pos[i*3+2] = position.z;
+    const v = new THREE.Vector3(Math.random()-.5, Math.random()-.5, Math.random()-.5).normalize().multiplyScalar(40 + Math.random()*160*magnitude);
+    vel[i*3] = v.x; vel[i*3+1] = v.y; vel[i*3+2] = v.z;
+    const hue = Math.random()*360; const c = new THREE.Color().setHSL(hue/360, 1, 0.6 + Math.random()*0.2);
+    col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+    life[i] = 1.0 + Math.random()*0.8;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('velocity', new THREE.BufferAttribute(vel,3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col,3));
+  geo.setAttribute('life', new THREE.BufferAttribute(life,1));
+  const mat = new THREE.PointsMaterial({ size:10, vertexColors:true, transparent:true, opacity:1 });
+  const points = new THREE.Points(geo, mat); points.userData = { mat };
+  scene.add(points); explosionSystems.push(points);
+  document.getElementById('flash').classList.add('show'); setTimeout(()=>document.getElementById('flash').classList.remove('show'), 120);
+}
+
+/* ============================
+   Smooth Controls & Movement
+   ============================ */
+let keys = {};
+let pitch = 0, yaw = 0;
+let targetPitch = 0, targetYaw = 0;
+let velocity = new THREE.Vector3(0,0,0);
+let acceleration = new THREE.Vector3(0,0,0);
+let speedBase = 24;
+let speedMult = 1, boostUntil = 0;
+let lastWTime = 0;
+let movementActive = false; // for movement SFX detection
+
+function getLookDirCurrent() {
+  // use smoothed pitch/yaw for direction
+  return new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch)).normalize();
+}
+
+/* Input events */
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase(); keys[k] = true;
+  if (!started && e.code === 'Space') { startGame(); }
+  if (started && e.code === 'Space') { togglePause(); }
+  if (k === 'w') {
+    const now = performance.now();
+    if (now - lastWTime < 250) { speedMult = 3.2; boostUntil = now + 1600; if (!sfxMuted) { sfxWarp(); sfxBoost(); } }
+    lastWTime = now;
+  }
+});
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+/* Pointer lock and mouse */
+function requestPointerLock() { const el = document.body; (el.requestPointerLock || el.mozRequestPointerLock || el.webkitRequestPointerLock).call(el); }
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement === document.body) {
+    targetYaw -= e.movementX * 0.0022;
+    targetPitch -= e.movementY * 0.0022;
+    const lim = Math.PI/2 * 0.995; targetPitch = Math.max(-lim, Math.min(lim, targetPitch));
+  }
+});
+/* pointer lock change detection to handle lost pointer (devtools/resize/ESC) */
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === document.body;
+  if (!locked && started && !isPaused) {
+    // show pointer lost overlay
+    pointerLost.style.display = 'grid';
+    // mute SFX to prevent accidental sounds while regained cursor
+    sfxMuted = true; stopMovementSfx();
+  } else {
+    pointerLost.style.display = 'none';
+    sfxMuted = false;
+  }
+});
+
+/* Smooth lerp parameters */
+const SMOOTHING = 0.08;    // how fast yaw/pitch catch up
+const POSITION_DAMP = 0.88; // velocity damping per frame
+const ACCEL = 200;         // acceleration scalar
+
+/* Idle breathing effect when velocity small */
+let idlePhase = 0;
+
+/* ============================
+   Game State / Start / Pause
+   ============================ */
+let started = false;
+function startGame() {
+  if (started) return;
+  ensureAudio();
+  // fade menu music -> game music
+  stopMenuMusic();
+  const track = musicSelect.value;
+  startGameMusic(track);
+  startAmbient();
+  startOverlay.style.display = 'none';
+  started = true;
+  requestPointerLock();
+}
+
+/* Pause handling */
+let isPaused = false;
+function togglePause() {
+  if (!started) return;
+  isPaused = !isPaused;
+  if (isPaused) {
+    pauseOverlay.style.display = 'grid';
+    // mute SFX while paused
+    sfxMuted = true;
+    stopMovementSfx();
+    // fade out game music, fade in menu music
+    stopGameMusic();
+    startMenuMusic();
+  } else {
+    pauseOverlay.style.display = 'none';
+    sfxMuted = false;
+    stopMenuMusic();
+    startGameMusic(musicSelect.value);
+    requestPointerLock();
+  }
+}
+
+/* ============================
+   Collision / gameplay interactions
+   ============================ */
+function checkLandscapeImpacts() {
+  for (let i = 0; i < landscape.children.length; i++) {
+    const m = landscape.children[i];
+    const d = camera.position.distanceTo(m.position);
+    if (d < (m.userData.radius || 300)) {
+      // impact
+      if (!sfxMuted) sfxImpact();
+      spawnExplosion(m.position, 0.6);
+      // move it away a bit so not re-trigger instantly
+      m.position.add(new THREE.Vector3((Math.random()-.5)*800, (Math.random()-.5)*800, (Math.random()-.5)*800));
+      // small score bump
+      addScore(20);
+      break;
+    }
+  }
+}
+
+/* ============================
+   Boss interactions
+   ============================ */
+function checkBossProximity(now) {
+  for (let i = bosses.length - 1; i >= 0; i--) {
+    const b = bosses[i];
+    b.userData.t += 0.016;
+    if (b.children) {
+      b.children.forEach((m, idx) => {
+        if (m.material && m.material.map) {
+          m.material.map.offset.y += (0.15 + idx*0.05) * 0.016;
+          m.material.map.offset.x += Math.sin(b.userData.t*0.5 + idx) * 0.03 * 0.016;
+        }
+      });
+    }
+    b.rotation.x += 0.003; b.rotation.y -= 0.004;
+    const dist = camera.position.distanceTo(b.position);
+    if (!b.userData.exploded && dist < 850) {
+      b.userData.exploded = true;
+      spawnExplosion(b.position, 1.35);
+      if (!sfxMuted) sfxBoss();
+      scene.remove(b); bosses.splice(i,1);
+      addScore(500);
+      // big popup done in addScore via showPointsPopup
+    }
+  }
+}
+
+/* ============================
+   Spawn scheduling
+   ============================ */
+function scheduleSpawns(now) {
+  if (!isPaused && started) {
+    if (now > nextBossTime) { spawnBoss(); nextBossTime = now + (2000 + Math.random()*3000); }
+    if (now > nextTunnelTime) { spawnWarpTunnel(); nextTunnelTime = now + (7000 + Math.random()*9000); }
+  }
+}
+
+/* ============================
+   Main animation loop
+   ============================ */
+let lastTime = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+
+  stars.rotation.y += 0.0001;
+
+  // Smooth yaw/pitch interpolation
+  yaw += (targetYaw - yaw) * SMOOTHING * 8 * dt * 60;
+  pitch += (targetPitch - pitch) * SMOOTHING * 8 * dt * 60;
+
+  if (started && !isPaused) {
+    // movement acceleration based on keys relative to look vector (smoothed yaw/pitch used)
+    const look = getLookDirCurrent();
+    const right = new THREE.Vector3(look.z, 0, -look.x).normalize();
+    const up = new THREE.Vector3(0,1,0);
+    let moveRequested = false;
+    let accelVec = new THREE.Vector3(0,0,0);
+    if (keys['w']) { accelVec.add(look); moveRequested = true; }
+    if (keys['s']) { accelVec.addScaledVector(look, -1); moveRequested = true; }
+    if (keys['a']) { accelVec.addScaledVector(right, -1); moveRequested = true; }
+    if (keys['d']) { accelVec.addScaledVector(right, 1); moveRequested = true; }
+
+    if (moveRequested) {
+      accelVec.normalize();
+      acceleration.copy(accelVec).multiplyScalar(ACCEL * (speedMult || 1) * dt);
+      velocity.add(acceleration);
+      // start movement SFX once
+      if (!movementActive) { movementActive = true; startMovementSfxIfNeeded(); }
+    } else {
+      // no input: apply damping and idle breathing
+      acceleration.set(0,0,0);
+      velocity.multiplyScalar(POSITION_DAMP);
+      if (movementActive) { movementActive = false; stopMovementSfx(); }
+      // breathing only when near still
+      if (velocity.length() < 1.5) {
+        idlePhase += dt * 0.9;
+        const breath = Math.sin(idlePhase) * 0.6;
+        camera.position.y = breath * 0.6; // subtle bob
+      } else {
+        idlePhase = 0;
+      }
+    }
+
+    // clamp velocity magnitude
+    const maxSpeed =  (speedBase * (speedMult || 1));
+    if (velocity.length() > maxSpeed) velocity.setLength(maxSpeed);
+    camera.position.addScaledVector(velocity, dt * 60);
+
+    // check collisions/impacts
+    checkLandscapeImpacts();
+    checkBossProximity(now);
+
+    // update warp tunnels and detect entry
+    for (let i = warpTunnels.length - 1; i >= 0; i--) {
+      const w = warpTunnels[i];
+      if (w.mesh.material && w.mesh.material.map) w.mesh.material.map.offset.y -= dt * 6.0;
+      const dist = camera.position.distanceTo(w.mesh.position);
+      if (dist < 240) {
+        speedMult = 3.6; boostUntil = now + 1800;
+        spawnExplosion(w.mesh.position, 1.0);
+        if (!sfxMuted) sfxWarp();
+        scene.remove(w.mesh); warpTunnels.splice(i,1);
+      } else if (dist > 8000) {
+        scene.remove(w.mesh); warpTunnels.splice(i,1);
+      }
+    }
+  }
+
+  // explosion particle updates
+  for (let i = explosionSystems.length - 1; i >= 0; i--) {
+    const p = explosionSystems[i]; const geo = p.geometry;
+    const pos = geo.attributes.position.array, vel = geo.attributes.velocity.array, life = geo.attributes.life.array;
+    let alive = false;
+    for (let j = 0; j < life.length; j++) {
+      if (life[j] > 0) {
+        alive = true;
+        const ix = j*3;
+        pos[ix]   += vel[ix]   * dt;
+        pos[ix+1] += vel[ix+1] * dt;
+        pos[ix+2] += vel[ix+2] * dt;
+        vel[ix]   *= (1 - 0.9*dt);
+        vel[ix+1] *= (1 - 0.9*dt);
+        vel[ix+2] *= (1 - 0.9*dt);
+        life[j]   -= 0.6 * dt;
+      }
+    }
+    p.material.opacity = Math.max(0, Math.min(1, life.reduce((a,b)=>a+b,0) / life.length));
+    geo.attributes.position.needsUpdate = true;
+    if (!alive || p.material.opacity < 0.03) { scene.remove(p); explosionSystems.splice(i,1); }
+  }
+
+  scheduleSpawns(now);
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+/* ============================
+   Spawn initial objects regionally so they are scattered
+   ============================ */
+spawnLandscape(80);
+
+/* ============================
+   UI & Audio startup
+   ============================ */
+let startedMusicPreloaded = false;
+preloadAudio().then(()=>{ startMenuMusic(); startedMusicPreloaded = true; }).catch(e=>{ console.warn('Audio preload failed', e); startMenuMusic(); });
+
+/* Pointer lock helper: calling request must be attached to user gesture */
+function requestPointerLock() {
+  const elem = document.body;
+  if (elem.requestPointerLock) elem.requestPointerLock();
+  else if (elem.mozRequestPointerLock) elem.mozRequestPointerLock();
+  else if (elem.webkitRequestPointerLock) elem.webkitRequestPointerLock();
+}
+
+/* Request pointer lock when clicking the canvas/body if started but pointer lost */
+document.body.addEventListener('click', (e) => {
+  if (started && document.pointerLockElement !== document.body && !isPaused) {
+    // only request on user gesture
+    requestPointerLock();
+  }
+});
+
+/* Start ambient & game on start button */
+playBtn.addEventListener('click', () => { startGame(); });
+
+/* Save best score on change (handled inside addScore). Also show in start/pause */
+function stopMenuMusic(){ if (menuMusicObj) menuMusicObj.stop(0.6); menuMusicObj = null; }
+function stopGameMusic(){ if (gameMusicObj) gameMusicObj.stop(0.6); gameMusicObj = null; }
+function startMenuMusic(){ if (!audioBuffers['menu/Eerie.mp3']) return; stopMenuMusic(); menuMusicObj = playBuffer('menu/Eerie.mp3', { loop:true, volume:MENU_MUSIC_VOLUME }); }
+function startGameMusic(track){ if (!audioBuffers['music/'+track]) return; stopGameMusic(); gameMusicObj = playBuffer('music/'+track, { loop:true, volume:MUSIC_VOLUME }); }
+function stopAmbient() { //lekrtghlö.irtuöghoartidhöorstihjÄOIHETRÖWZ-O6JHALLOERRORHELPTHIS IS A MISTAKE
+    ambientSounds.forEach(sound => {
+        sound.pause();
+        sound.currentTime = 0;
+    });
+}
+
+/* Expose some game hooks for debug/testing */
+window._skyfly = {
+  addScore,
+  spawnBoss,
+  spawnWarpTunnel,
+  sfxWarp, sfxImpact, sfxBoss,
+  stopMovementSfx,
+  startMovementSfxIfNeeded
+};
+
+/* Handle resize: pointerlock might be lost; show overlay */
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  // When resizing, some browsers may drop pointer lock. Show pointerLost if so (pointerlockchange handles actual display).
+});
+
+/* ensure best loaded/shown */
+loadBest();
+updateScoreDisplay();
+
+</script>
+</body>
+</html>

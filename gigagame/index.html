@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>3D Rolling Ball Game</title>
+<style>
+  body { margin: 0; overflow: hidden; touch-action: none; background: #87CEEB; }
+  canvas { display: block; }
+  #score { position: absolute; top: 10px; left: 10px; color: white; font-family: sans-serif; font-size: 20px; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="score">Score: 0</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"></script>
+<script>
+
+let scene, camera, renderer;
+let world;
+let ballBody, ballMesh;
+let platforms = [];
+let score = 0;
+let forwardSpeed = 10;
+let tiltX = 0, tiltY = 0;
+let clock = new THREE.Clock();
+
+// Initialize Three.js scene
+function initThree() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.02);
+
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, -10);
+    camera.lookAt(0, 0, 0);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Light
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambient);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 10, -5);
+    scene.add(dirLight);
+}
+
+// Initialize Cannon.js physics
+function initPhysics() {
+    world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.allowSleep = true;
+
+    // Ball
+    const radius = 1;
+    const ballShape = new CANNON.Sphere(radius);
+    ballBody = new CANNON.Body({ mass: 5, shape: ballShape, material: new CANNON.Material({ friction: 0.1, restitution: 0.3 }) });
+    ballBody.position.set(0, 5, 0);
+    world.addBody(ballBody);
+
+    // Ground
+    addPlatform(0, 0, 0, 20, 1, 200);
+}
+
+// Add platforms
+function addPlatform(x, y, z, w, h, d) {
+    const shape = new CANNON.Box(new CANNON.Vec3(w/2, h/2, d/2));
+    const body = new CANNON.Body({ mass: 0, shape });
+    body.position.set(x, y, z);
+    world.addBody(body);
+
+    const geometry = new THREE.BoxGeometry(w, h, d);
+    const material = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(body.position);
+    scene.add(mesh);
+
+    platforms.push({ body, mesh });
+}
+
+// Create obstacles / shapes
+function addObstacle(x, y, z) {
+    const size = Math.random() * 1 + 0.5;
+    const geometry = new THREE.BoxGeometry(size, size, size);
+    const material = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+
+    const shape = new CANNON.Box(new CANNON.Vec3(size/2, size/2, size/2));
+    const body = new CANNON.Body({ mass: 0, shape });
+    body.position.set(x, y, z);
+    world.addBody(body);
+}
+
+// Handle device tilt
+window.addEventListener('deviceorientation', (event) => {
+    tiltX = event.gamma / 30; // left-right
+    tiltY = event.beta / 30; // forward-back
+}, true);
+
+// Fallback touch controls
+let touchStartX = 0, touchStartY = 0;
+window.addEventListener('touchstart', e => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+}, false);
+
+window.addEventListener('touchmove', e => {
+    const dx = (e.touches[0].clientX - touchStartX) / window.innerWidth;
+    const dy = (e.touches[0].clientY - touchStartY) / window.innerHeight;
+    tiltX = dx * 2;
+    tiltY = dy * 2;
+}, false);
+
+// Game loop
+function animate() {
+    requestAnimationFrame(animate);
+    const delta = clock.getDelta();
+
+    // Move platforms and obstacles to create endless forward effect
+    platforms.forEach(p => {
+        p.mesh.position.z += forwardSpeed * delta;
+        p.body.position.z += forwardSpeed * delta;
+
+        if(p.mesh.position.z > 20) {
+            const newZ = -180 + Math.random()*20;
+            const newX = (Math.random() - 0.5) * 10;
+            p.mesh.position.set(newX, 0, newZ);
+            p.body.position.set(newX, 0, newZ);
+        }
+    });
+
+    // Apply tilt forces
+    ballBody.applyForce(new CANNON.Vec3(tiltX * 50, 0, -tiltY * 50), ballBody.position);
+
+    // Step physics
+    world.step(1/60, delta, 3);
+
+    // Sync ball mesh
+    if(!ballMesh) {
+        const geometry = new THREE.SphereGeometry(1, 32, 32);
+        const material = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.5 });
+        ballMesh = new THREE.Mesh(geometry, material);
+        scene.add(ballMesh);
+    }
+    ballMesh.position.copy(ballBody.position);
+    ballMesh.quaternion.copy(ballBody.quaternion);
+
+    // Update camera
+    camera.position.x = ballBody.position.x;
+    camera.position.z = ballBody.position.z - 10;
+    camera.position.y = ballBody.position.y + 5;
+    camera.lookAt(ballBody.position);
+
+    // Randomly add obstacles
+    if(Math.random() < 0.01) {
+        addObstacle((Math.random()-0.5)*10, 1, ballBody.position.z - 60);
+    }
+
+    // Update score
+    score = Math.floor(ballBody.position.z);
+    document.getElementById('score').innerText = "Score: " + score;
+
+    renderer.render(scene, camera);
+}
+
+// Initialize everything
+initThree();
+initPhysics();
+animate();
+
+</script>
+</body>
+</html>
