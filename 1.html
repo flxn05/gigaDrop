@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Cursor Glow + Trail</title>
+<style>
+  :root {
+    --grid-size: 40px;
+    --bg: #0d0d0d;
+    --line: rgba(255,255,255,0.06);
+  }
+
+  html,body {
+    height:100%;
+    margin:0;
+    background: var(--bg);
+    cursor: default;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+
+  body {
+    background-image:
+      linear-gradient(0deg, var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: var(--grid-size) var(--grid-size);
+  }
+
+  .trail {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9990;
+  }
+
+  .cursor-glow {
+    position: fixed;
+    top:0; left:0;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%) translateZ(0);
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.7) 25%, rgba(255,255,255,0.12) 60%, rgba(255,255,255,0) 100%);
+    box-shadow: 0 0 80px rgba(255,255,255,0.9), 0 0 40px rgba(255,255,255,0.6);
+    will-change: transform, width, height, opacity, box-shadow;
+    z-index: 9998;
+    transition: transform 120ms linear;
+  }
+
+  .trail-dot {
+    position: fixed;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%,-50%) translateZ(0);
+    background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.55) 40%, rgba(255,255,255,0.05) 100%);
+    opacity: 0.9;
+    filter: blur(6px);
+    will-change: transform, opacity, width, height;
+  }
+
+  .click-flash {
+    position: fixed;
+    top:0; left:0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    pointer-events: none;
+    background: rgba(255,255,255,0.9);
+    transform: translate(-50%,-50%) translateZ(0) scale(0.6);
+    opacity: 0.95;
+    filter: blur(8px);
+    z-index: 10000;
+  }
+</style>
+</head>
+<body>
+
+<div class="trail" id="trail"></div>
+<div class="cursor-glow" id="glow"></div>
+
+<script>
+const GRID = 40;
+const LERP = 0.08;
+const SPEED_CAP = 1200;
+const TRAIL_SPAWN_DIST = 8;
+const TRAIL_LIFE = 600;
+
+const glow = document.getElementById('glow');
+const trailContainer = document.getElementById('trail');
+
+let targetX = window.innerWidth/2, targetY = window.innerHeight/2;
+let currentX = targetX, currentY = targetY;
+let lastMouseX = targetX, lastMouseY = targetY, lastTime = performance.now();
+let velocity = 0;
+let lastTrailX = targetX, lastTrailY = targetY;
+
+window.addEventListener('mousemove', (e) => {
+  targetX = e.clientX;
+  targetY = e.clientY;
+
+  const now = performance.now();
+  const dt = Math.max((now - lastTime)/1000, 0.001);
+  const dx = e.clientX - lastMouseX;
+  const dy = e.clientY - lastMouseY;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  velocity = dist / dt;
+
+  lastMouseX = e.clientX; lastMouseY = e.clientY; lastTime = now;
+
+  if (Math.hypot(targetX - lastTrailX, targetY - lastTrailY) > TRAIL_SPAWN_DIST) {
+    spawnTrailDot(targetX, targetY, velocity);
+    lastTrailX = targetX; lastTrailY = targetY;
+  }
+});
+
+window.addEventListener('mousedown', (e) => {
+  const flash = document.createElement('div');
+  flash.className = 'click-flash';
+  document.body.appendChild(flash);
+  flash.style.left = (e.clientX) + 'px';
+  flash.style.top  = (e.clientY) + 'px';
+
+  requestAnimationFrame(() => {
+    flash.style.transition = 'transform 260ms ease-out, opacity 260ms ease-out, width 260ms linear, height 260ms linear';
+    flash.style.transform = 'translate(-50%,-50%) scale(3)';
+    flash.style.opacity = '0';
+    flash.style.width = '160px';
+    flash.style.height = '160px';
+  });
+  setTimeout(() => flash.remove(), 300);
+});
+
+function spawnTrailDot(x, y, vel) {
+  const d = document.createElement('div');
+  d.className = 'trail-dot';
+  const speedFactor = Math.min(vel / SPEED_CAP, 1);
+  const size = 8 + speedFactor * 22;
+  const opa = 0.45 + (1 - speedFactor) * 0.5;
+
+  d.style.left = x + 'px';
+  d.style.top = y + 'px';
+  d.style.width = size + 'px';
+  d.style.height = size + 'px';
+  d.style.opacity = opa;
+
+  trailContainer.appendChild(d);
+
+  requestAnimationFrame(() => {
+    d.style.transition = `opacity ${TRAIL_LIFE}ms linear, transform ${TRAIL_LIFE}ms linear, width ${TRAIL_LIFE}ms linear, height ${TRAIL_LIFE}ms linear`;
+    d.style.transform = 'translate(-50%,-50%) scale(1.25)';
+    d.style.opacity = '0';
+    d.style.width = (size*1.5) + 'px';
+    d.style.height = (size*1.5) + 'px';
+  });
+
+  setTimeout(() => { try{d.remove()}catch(e){} }, TRAIL_LIFE + 40);
+}
+
+let pulseT = 0;
+function animate(){
+  currentX += (targetX - currentX) * LERP;
+  currentY += (targetY - currentY) * LERP;
+
+  const speedFactor = Math.min(velocity / SPEED_CAP, 1);
+  const baseSize = 48;
+  const size = baseSize + speedFactor * 40;
+  const opacity = 0.22 + (1 - speedFactor) * 0.78;
+  const glowPx = 60 + speedFactor * 120;
+
+  if (speedFactor < 0.12) {
+    pulseT += 0.04;
+    const pulse = Math.sin(pulseT) * 4;
+    glow.style.width = (size + pulse) + 'px';
+    glow.style.height = (size + pulse) + 'px';
+  } else {
+    glow.style.width = size + 'px';
+    glow.style.height = size + 'px';
+  }
+
+  glow.style.transform = `translate(${currentX}px, ${currentY}px) translate(-50%, -50%)`;
+  glow.style.boxShadow = `0 0 ${glowPx}px rgba(255,255,255,${Math.max(0.25, opacity)}) , 0 0 ${Math.max(20, glowPx/2)}px rgba(255,255,255,${Math.max(0.12, opacity*0.8)})`;
+  glow.style.opacity = opacity;
+
+  velocity *= 0.92;
+  requestAnimationFrame(animate);
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+  targetX = Math.min(targetX, window.innerWidth);
+  targetY = Math.min(targetY, window.innerHeight);
+});
+</script>
+</body>
+</html>
