@@ -20,6 +20,7 @@ let scene, camera, renderer;
 let world;
 let ballBody, ballMesh;
 let platforms = [];
+let obstacles = [];
 let score = 0;
 let forwardSpeed = 10;
 let tiltX = 0, tiltY = 0;
@@ -28,17 +29,15 @@ let clock = new THREE.Clock();
 // Initialize Three.js scene
 function initThree() {
     scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x87CEEB, 0.02);
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.005); // lighter fog
 
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 5, -10);
-    camera.lookAt(0, 0, 0);
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Light
+    // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -53,17 +52,19 @@ function initPhysics() {
     world.allowSleep = true;
 
     // Ball
-    const radius = 1;
+    const radius = 1.2;
     const ballShape = new CANNON.Sphere(radius);
     ballBody = new CANNON.Body({ mass: 5, shape: ballShape, material: new CANNON.Material({ friction: 0.1, restitution: 0.3 }) });
     ballBody.position.set(0, 5, 0);
     world.addBody(ballBody);
 
-    // Ground
-    addPlatform(0, 0, 0, 20, 1, 200);
+    // Starting platforms
+    addPlatform(0, 0, 0, 8, 1, 20);
+    addPlatform(2, 0, -25, 8, 1, 20);
+    addPlatform(-2, 0, -50, 8, 1, 20);
 }
 
-// Add platforms
+// Add a platform
 function addPlatform(x, y, z, w, h, d) {
     const shape = new CANNON.Box(new CANNON.Vec3(w/2, h/2, d/2));
     const body = new CANNON.Body({ mass: 0, shape });
@@ -79,7 +80,7 @@ function addPlatform(x, y, z, w, h, d) {
     platforms.push({ body, mesh });
 }
 
-// Create obstacles / shapes
+// Add obstacles
 function addObstacle(x, y, z) {
     const size = Math.random() * 1 + 0.5;
     const geometry = new THREE.BoxGeometry(size, size, size);
@@ -92,21 +93,22 @@ function addObstacle(x, y, z) {
     const body = new CANNON.Body({ mass: 0, shape });
     body.position.set(x, y, z);
     world.addBody(body);
+
+    obstacles.push({ body, mesh });
 }
 
-// Handle device tilt
+// Device tilt controls
 window.addEventListener('deviceorientation', (event) => {
-    tiltX = event.gamma / 30; // left-right
-    tiltY = event.beta / 30; // forward-back
+    tiltX = event.gamma / 30;
+    tiltY = event.beta / 30;
 }, true);
 
-// Fallback touch controls
+// Touch fallback
 let touchStartX = 0, touchStartY = 0;
 window.addEventListener('touchstart', e => {
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
 }, false);
-
 window.addEventListener('touchmove', e => {
     const dx = (e.touches[0].clientX - touchStartX) / window.innerWidth;
     const dy = (e.touches[0].clientY - touchStartY) / window.innerHeight;
@@ -114,23 +116,28 @@ window.addEventListener('touchmove', e => {
     tiltY = dy * 2;
 }, false);
 
-// Game loop
+// Animate loop
 function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
 
-    // Move platforms and obstacles to create endless forward effect
+    // Endless platform effect
     platforms.forEach(p => {
         p.mesh.position.z += forwardSpeed * delta;
         p.body.position.z += forwardSpeed * delta;
 
-        if(p.mesh.position.z > 20) {
-            const newZ = -180 + Math.random()*20;
-            const newX = (Math.random() - 0.5) * 10;
+        if(p.mesh.position.z > 10) {
+            const newZ = -60 + Math.random()*10;
+            const newX = (Math.random() - 0.5) * 8;
             p.mesh.position.set(newX, 0, newZ);
             p.body.position.set(newX, 0, newZ);
         }
     });
+
+    // Randomly spawn obstacles ahead
+    if(Math.random() < 0.02) {
+        addObstacle((Math.random()-0.5)*8, 1, ballBody.position.z - 40);
+    }
 
     // Apply tilt forces
     ballBody.applyForce(new CANNON.Vec3(tiltX * 50, 0, -tiltY * 50), ballBody.position);
@@ -138,35 +145,30 @@ function animate() {
     // Step physics
     world.step(1/60, delta, 3);
 
-    // Sync ball mesh
+    // Ball mesh
     if(!ballMesh) {
-        const geometry = new THREE.SphereGeometry(1, 32, 32);
-        const material = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.5 });
+        const geometry = new THREE.SphereGeometry(1.2, 32, 32);
+        const material = new THREE.MeshStandardMaterial({ color: 0xffcc00, metalness: 0.5, roughness: 0.5 });
         ballMesh = new THREE.Mesh(geometry, material);
         scene.add(ballMesh);
     }
     ballMesh.position.copy(ballBody.position);
     ballMesh.quaternion.copy(ballBody.quaternion);
 
-    // Update camera
+    // Camera follows ball
     camera.position.x = ballBody.position.x;
-    camera.position.z = ballBody.position.z - 10;
-    camera.position.y = ballBody.position.y + 5;
+    camera.position.z = ballBody.position.z - 12;
+    camera.position.y = ballBody.position.y + 6;
     camera.lookAt(ballBody.position);
 
-    // Randomly add obstacles
-    if(Math.random() < 0.01) {
-        addObstacle((Math.random()-0.5)*10, 1, ballBody.position.z - 60);
-    }
-
     // Update score
-    score = Math.floor(ballBody.position.z);
+    score = Math.max(0, Math.floor(-ballBody.position.z));
     document.getElementById('score').innerText = "Score: " + score;
 
     renderer.render(scene, camera);
 }
 
-// Initialize everything
+// Initialize
 initThree();
 initPhysics();
 animate();
