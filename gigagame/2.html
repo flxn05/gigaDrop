@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Satisfying 3D Game — Click / Tap to Shoot</title>
+  <meta name="description" content="Small portable 3D game with touch & mouse controls, shading and satisfying feedback." />
+  <style>
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial}
+    canvas{display:block}
+    #ui{position:fixed;left:16px;top:12px;z-index:20;color:#fff;pointer-events:none}
+    .panel{background:rgba(0,0,0,0.35);backdrop-filter:blur(6px);padding:10px 12px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,0.45)}
+    #score{font-weight:700;font-size:18px}
+    #controls{margin-top:8px;font-size:13px;opacity:0.95}
+    #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:26px;z-index:20;background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));color:#fff;padding:8px 14px;border-radius:999px;font-weight:600;pointer-events:none}
+    #startBtn{pointer-events:auto;margin-left:8px}
+    #bottomBar{position:fixed;right:16px;top:12px;z-index:20}
+    button{all:unset;background:#fff;color:#0b0b0b;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:600;box-shadow:0 6px 20px rgba(8,12,20,0.25)}
+    .small{padding:6px 8px;font-size:13px}
+    #mobileOverlay{display:none;position:fixed;inset:0;z-index:15;pointer-events:none}
+    @media (pointer:coarse){#mobileOverlay{display:block}}
+    /* Aim line */
+    .aimDot{position:fixed;left:0;top:0;width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,0.9);transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,0.4)}
+    .chargeBar{height:6px;background:rgba(255,255,255,0.12);border-radius:999px;overflow:hidden;margin-top:8px}
+    .chargeFill{height:100%;width:0%;background:linear-gradient(90deg,#00ffd5,#0066ff);transition:width 0.06s}
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="panel">
+      <div id="score">Score: <span id="scoreVal">0</span></div>
+      <div id="controls">Hold + drag to aim & charge — release to shoot. <button id="startBtn" class="small">Restart</button></div>
+      <div class="chargeBar" style="display:block"><div class="chargeFill" id="chargeFill"></div></div>
+    </div>
+  </div>
+  <div id="bottomBar">
+    <button id="muteBtn" class="small">Mute</button>
+  </div>
+  <div id="hint">Tap & drag — satisfying hits!</div>
+  <div id="mobileOverlay"><div class="aimDot" id="aimDot" style="display:none"></div></div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.152.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.152.0/examples/jsm/controls/OrbitControls.js';
+
+    // Scene essentials
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x071025);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(0, 1.8, 4.2);
+
+    // Resize
+    function resize(){
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    // Controls (for desktop; mobile will use touch gestures to shoot)
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.minDistance = 2.5;
+    controls.maxDistance = 8;
+    controls.maxPolarAngle = Math.PI * 0.9;
+
+    // Lights
+    const hemi = new THREE.HemisphereLight(0xaaccff, 0x101020, 0.8);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(3, 5, 2);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(1024,1024);
+    dir.shadow.camera.near = 0.5;
+    dir.shadow.camera.far = 20;
+    scene.add(dir);
+
+    // Ground
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(40,40),
+      new THREE.MeshStandardMaterial({color:0x091229, metalness:0.1, roughness:0.6})
+    );
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = -1.4;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Central "satisfying" shape
+    const geom = new THREE.IcosahedronGeometry(1, 3); // good mix of faces
+    // Vertex colors for a pleasing gradient
+    const colorA = new THREE.Color(0x00e0ff);
+    const colorB = new THREE.Color(0x4a00ff);
+    const positionAttr = geom.attributes.position;
+    const colors = new Float32Array(positionAttr.count * 3);
+    for(let i=0;i<positionAttr.count;i++){
+      const v = new THREE.Vector3().fromBufferAttribute(positionAttr, i);
+      const t = (v.y + 1.5) / 3.0; // -1.5..1.5 -> 0..1
+      const c = colorA.clone().lerp(colorB, t);
+      colors[i*3]=c.r;colors[i*3+1]=c.g;colors[i*3+2]=c.b;
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(colors,3));
+
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0.25,
+      roughness: 0.25,
+      emissive: new THREE.Color(0x000000),
+      clearcoat: 0.4,
+      clearcoatRoughness: 0.2
+    });
+
+    const core = new THREE.Mesh(geom, material);
+    core.castShadow = true;
+    core.position.y = 0.0;
+    scene.add(core);
+
+    // Subtle wireframe shell for extra visual satisfaction
+    const wire = new THREE.Mesh(geom.clone(), new THREE.MeshBasicMaterial({wireframe:true, opacity:0.06, transparent:true,color:0xffffff}));
+    wire.scale.multiplyScalar(1.01);
+    scene.add(wire);
+
+    // Glow ring effect that pulses on hit
+    const glowMat = new THREE.MeshBasicMaterial({color:0x00ffd0, transparent:true, opacity:0.08});
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(1.3, 32, 32), glowMat);
+    glow.visible = false;
+    scene.add(glow);
+
+    // Small particle group for hit sparks
+    const sparks = [];
+    const tmpVec = new THREE.Vector3();
+
+    // Shooting mechanics - simple projectile spheres
+    const projectiles = [];
+
+    function makeProjectile(pos, dir, power){
+      const r = 0.07 + Math.min(0.16, power*0.08);
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), new THREE.MeshStandardMaterial({emissive:0xffffff, emissiveIntensity:0.9, metalness:0.6, roughness:0.3}));
+      m.position.copy(pos);
+      m.castShadow = true;
+      scene.add(m);
+      projectiles.push({mesh:m, vel:dir.clone().multiplyScalar(6 + power*14), life:6});
+    }
+
+    // Score & UI
+    let score = 0;
+    const scoreVal = document.getElementById('scoreVal');
+    function addScore(n){score += n; scoreVal.textContent = String(score);}
+
+    // Audio -- tiny synthesized blip
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let muted = false;
+    function blip(freq = 600, time=0.08){ if(muted) return; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sine'; o.frequency.value = freq; g.gain.value = 0.001; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.linearRampToValueAtTime(0.08, audioCtx.currentTime+0.004); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+time); o.stop(audioCtx.currentTime + time + 0.02); }
+
+    document.getElementById('muteBtn').addEventListener('click', ()=>{ muted = !muted; document.getElementById('muteBtn').textContent = muted? 'Unmute' : 'Mute'; });
+
+    // Hit detection: when projectile enters within radius
+    const coreRadius = 1.02; // approximate
+
+    // Pointer controls for aiming & charging
+    let isAiming = false;
+    let pointerDownPos = new THREE.Vector2();
+    let pointerNow = new THREE.Vector2();
+    let charge = 0;
+    let lastPointerTime = 0;
+    const aimDot = document.getElementById('aimDot');
+    const chargeFill = document.getElementById('chargeFill');
+
+    function toNDCScreen(x,y){
+      return new THREE.Vector2((x/window.innerWidth)*2-1, -(y/window.innerHeight)*2+1);
+    }
+
+    function screenToWorld(ndc, distance = 2.6){
+      const v = new THREE.Vector3(ndc.x, ndc.y, 0.5).unproject(camera);
+      const dir = v.sub(camera.position).normalize();
+      return camera.position.clone().add(dir.multiplyScalar(distance));
+    }
+
+    function startAim(x,y){
+      isAiming = true; pointerDownPos.set(x,y); pointerNow.set(x,y); lastPointerTime = performance.now(); charge = 0; aimDot.style.display = 'block'; aimDot.style.left = x+'px'; aimDot.style.top = y+'px'; chargeFill.style.width = '0%';
+    }
+    function updateAim(x,y){ if(!isAiming) return; pointerNow.set(x,y); aimDot.style.left = x+'px'; aimDot.style.top = y+'px'; const dt = Math.min(1, (performance.now()-lastPointerTime)/1000); lastPointerTime = performance.now(); charge = Math.min(1, charge + dt*0.9); chargeFill.style.width = Math.round(charge*100)+'%'; }
+    function endAim(x,y){ if(!isAiming) return; isAiming = false; aimDot.style.display = 'none'; const ndcDown = toNDCScreen(pointerDownPos.x, pointerDownPos.y); const ndcUp = toNDCScreen(x,y); const startWorld = screenToWorld(ndcDown, 1.8); const endWorld = screenToWorld(ndcUp, 5.0); const dir = endWorld.clone().sub(startWorld).normalize(); makeProjectile(startWorld, dir, charge); blip(600 + charge*700, 0.09); charge = 0; chargeFill.style.width = '0%'; }
+
+    // Pointer events
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.addEventListener('pointerdown', (e)=>{
+      // prevent orbit controls from activating while aiming
+      if(e.pointerType==='mouse' && e.button!==0) return;
+      controls.enabled = false;
+      startAim(e.clientX, e.clientY);
+    });
+    window.addEventListener('pointermove',(e)=>{ updateAim(e.clientX, e.clientY); });
+    window.addEventListener('pointerup',(e)=>{ endAim(e.clientX, e.clientY); controls.enabled = true; });
+    // Support leaving the window
+    window.addEventListener('pointercancel', ()=>{ if(isAiming) {isAiming=false; aimDot.style.display='none'; controls.enabled=true; charge=0; chargeFill.style.width='0%';}});
+
+    // Mobile quick tap: quick tap shoots forward
+    window.addEventListener('touchstart', (ev)=>{ if(ev.touches.length===1){ const t = ev.touches[0]; startAim(t.clientX, t.clientY); } }, {passive:true});
+    window.addEventListener('touchmove', (ev)=>{ if(ev.touches.length===1){ const t=ev.touches[0]; updateAim(t.clientX, t.clientY); }}, {passive:true});
+    window.addEventListener('touchend', (ev)=>{ if(isAiming){ endAim(pointerNow.x, pointerNow.y); }}, {passive:true});
+
+    // Restart
+    document.getElementById('startBtn').addEventListener('click', ()=>{ restart(); });
+    function restart(){ score = 0; scoreVal.textContent = '0'; // reset core visual
+      core.scale.set(1,1,1); material.color.setHex(0xffffff); core.rotation.set(0,0,0);
+      // remove projectiles & sparks
+      for(const p of projectiles){ scene.remove(p.mesh); }
+      projectiles.length = 0;
+      for(const s of sparks){ scene.remove(s.mesh); }
+      sparks.length = 0;
+    }
+
+    // Game loop
+    let last = performance.now();
+    function animate(){
+      const now = performance.now();
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+
+      controls.update();
+
+      // Rotate core slowly
+      core.rotation.y += dt * 0.6;
+      core.rotation.x += dt * 0.12;
+      wire.rotation.copy(core.rotation).multiplyScalar(1.01);
+
+      // Update projectiles
+      for(let i = projectiles.length-1; i>=0; i--){
+        const p = projectiles[i];
+        p.life -= dt;
+        p.mesh.position.addScaledVector(p.vel, dt);
+        // simple drag
+        p.vel.multiplyScalar(Math.max(0, 1 - dt*0.4));
+        // collision with core
+        const dist = p.mesh.position.distanceTo(core.position);
+        if(dist < coreRadius + (p.mesh.geometry.parameters.radius || 0.08)){
+          // hit!
+          handleHit(p.mesh.position);
+          scene.remove(p.mesh);
+          projectiles.splice(i,1);
+          continue;
+        }
+        if(p.life <= 0 || Math.abs(p.mesh.position.y) > 40){ scene.remove(p.mesh); projectiles.splice(i,1); }
+      }
+
+      // Update sparks
+      for(let i=sparks.length-1;i>=0;i--){
+        const s = sparks[i]; s.mesh.position.addScaledVector(s.vel, dt); s.life -= dt; s.mesh.material.opacity = Math.max(0, s.life/1.0) * 0.9; if(s.life<=0){ scene.remove(s.mesh); sparks.splice(i,1); }
+      }
+
+      // Glow decay
+      if(glow.visible){ glow.material.opacity *= Math.pow(0.002, dt); if(glow.material.opacity < 0.001) glow.visible = false; }
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    function handleHit(pos){
+      addScore(1);
+      blip(800 + Math.random()*400, 0.12);
+      // pulse core
+      const s = 1.0 + Math.random()*0.14;
+      core.scale.set(s, s, s);
+      // color flash
+      material.emissive.setHSL(Math.random()*0.15 + 0.6, 1.0, 0.1);
+      setTimeout(()=>{ core.scale.set(1,1,1); material.emissive.setHex(0x000000); }, 160);
+      // show glow briefly
+      glow.position.copy(core.position);
+      glow.material.opacity = 0.20;
+      glow.visible = true;
+
+      // spawn sparks
+      const count = 8 + Math.floor(Math.random()*8);
+      for(let i=0;i<count;i++){
+        const m = new THREE.Mesh(new THREE.SphereGeometry(0.03 + Math.random()*0.03, 8,8), new THREE.MeshBasicMaterial({color:0xffffff, transparent:true}));
+        m.position.copy(pos);
+        scene.add(m);
+        const dir = new THREE.Vector3((Math.random()-0.5), Math.random()*0.8, (Math.random()-0.5)).normalize();
+        sparks.push({mesh:m, vel:dir.multiplyScalar(1.4 + Math.random()*2.5), life:0.6 + Math.random()*0.8});
+      }
+    }
+
+    // subtle idle breathing of core color
+    (function idleColorLoop(){
+      const t = performance.now()*0.00032;
+      const a = 0.5 + Math.sin(t)*0.5;
+      // tint the vertex colors by a small amount via material.color
+      material.color.setRGB(0.85 + 0.15*a, 0.9, 1.0 - 0.1*a);
+      requestAnimationFrame(idleColorLoop);
+    })();
+
+    // Start animation
+    animate();
+
+    // warm up audio context on first user gesture for iOS
+    window.addEventListener('pointerdown', ()=>{ if(audioCtx.state === 'suspended') audioCtx.resume(); }, {once:true});
+
+    // small accessibility: keyboard shoot forward
+    window.addEventListener('keydown', (e)=>{
+      if(e.code==='Space'){ const ndc = new THREE.Vector2(0,0); const startWorld = screenToWorld(ndc, 1.8); const dir = camera.getWorldDirection(new THREE.Vector3()).clone(); makeProjectile(startWorld, dir, 0.6); blip(700, 0.08); }
+    });
+
+    // helpful tweaks for mobile performance
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(prefersReduced){ renderer.setAnimationLoop(null); }
+
+    // Initial tiny bounce to make things feel alive
+    core.scale.set(0.995,0.995,0.995);
+    gsapWakeUp();
+
+    // lightweight kickoff pulse (without external libs) to avoid extra deps
+    function gsapWakeUp(){
+      const start = performance.now();
+      function p(){
+        const t = (performance.now() - start)/800;
+        if(t < 1){ const f = Math.sin(t*Math.PI)*0.06 + 1.0; core.scale.set(f,f,f); requestAnimationFrame(p); } else core.scale.set(1,1,1);
+      }
+      p();
+    }
+
+    // done
+  </script>
+</body>
+</html>

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Immersive Space — Mobile & Gamepad</title>
+<style>
+  :root{--hud-bg:rgba(6,6,6,0.56);--panel:#0c0c0c}
+  html,body{height:100%;margin:0;background:#000;color:#ddd;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  canvas{display:block;position:fixed;inset:0}
+  #hud{position:fixed;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;pointer-events:none;z-index:40}
+  .panel{pointer-events:auto;background:var(--hud-bg);border:1px solid rgba(255,255,255,0.04);border-radius:12px;padding:10px 12px;backdrop-filter:blur(6px)}
+  #center{position:fixed;inset:0;display:grid;place-items:center;z-index:30}
+  .btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.06);padding:12px 16px;border-radius:12px;color:#eee;font-weight:700;cursor:pointer}
+  #crosshair{position:fixed;left:50%;top:50%;width:12px;height:12px;margin-left:-6px;margin-top:-6px;border-radius:50%;box-shadow:0 0 0 1px rgba(255,255,255,0.12);pointer-events:none;z-index:20}
+  /* Thumbsticks */
+  .stick {
+    position:fixed;
+    width:140px;
+    height:140px;
+    margin-left:-70px;
+    margin-top:-70px;
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+    border:1px solid rgba(255,255,255,0.05);
+    display:flex;align-items:center;justify-content:center;
+    opacity:0; transform:scale(0.9); transition:opacity .22s ease, transform .22s ease;
+    touch-action: none; z-index:50;
+  }
+  .stick.visible{opacity:0.88;transform:scale(1)}
+  .knob{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,0.08);backdrop-filter: blur(2px);box-shadow:0 6px 18px rgba(0,0,0,0.6);display:block;pointer-events:none}
+  /* small vertical buttons above left stick */
+  .vbtn {
+    position: absolute; left:50%; transform:translateX(-50%);
+    width:44px;height:34px;border-radius:10px;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;border:1px solid rgba(255,255,255,0.04)
+  }
+  .vbtn.up{top:-48px}
+  .vbtn.down{bottom:-48px}
+  /* hide mobile elements on desktop if pointer fine */
+  @media (pointer:fine){ .stick{display:none} }
+  /* small helper for gamepad hint */
+  #gpHint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,0.04);font-size:13px;z-index:40}
+</style>
+</head>
+<body>
+  <div id="hud">
+    <div class="panel" id="help" style="max-width:640px;line-height:1.35;pointer-events:auto">
+      <strong style="font-size:16px;display:block;margin-bottom:6px">IMMERSIVE SPACE — Mobile & Controller</strong>
+      Click center to lock mouse. Dual thumbsticks (fade-in) on touch. Gamepad supported.
+      <div style="margin-top:6px;font-size:13px">Move: <code>W/A/S/D</code> • Up/Down: <code>Space</code>/<code>Ctrl</code> • Roll: <code>Q</code>/<code>E</code> • Boost: <code>Shift</code></div>
+    </div>
+    <div class="panel" id="stats" style="min-width:200px;text-align:right;pointer-events:auto"></div>
+  </div>
+
+  <div id="center"><button id="enterBtn" class="btn">Click to Enter Space</button></div>
+  <div id="crosshair"></div>
+  <div id="gpHint">Gamepad: move = left stick, look = right stick, LT/RT = thrust, LB/RB = roll</div>
+
+  <!-- Mobile thumbsticks -->
+  <div id="leftStick" class="stick" aria-hidden="true">
+    <div class="vbtn up" id="leftUp">▲</div>
+    <div class="knob" id="leftKnob"></div>
+    <div class="vbtn down" id="leftDown">▼</div>
+  </div>
+  <div id="rightStick" class="stick" aria-hidden="true">
+    <div class="knob" id="rightKnob"></div>
+  </div>
+
+<script type="module">
+// Fixed immersive-space JS (module) — no duplicate identifiers
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+// Renderer / scene / camera
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 1);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.00055);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 4000);
+const rig = new THREE.Object3D();
+rig.add(camera);
+scene.add(rig);
+
+// Single, consolidated helper to produce a random point in a spherical shell around the rig.
+// This replaces any previous duplicate randSphere / randSphereShell names.
+const randSphereAroundRig = (minR, maxR) => {
+  const u = Math.random(), v = Math.random();
+  const theta = 2 * Math.PI * u;
+  const phi = Math.acos(2 * v - 1);
+  const r = minR + Math.random() * (maxR - minR);
+  const x = r * Math.sin(phi) * Math.cos(theta) + rig.position.x;
+  const y = r * Math.cos(phi) + rig.position.y;
+  const z = r * Math.sin(phi) * Math.sin(theta) + rig.position.z;
+  return [x, y, z];
+};
+
+// Starfield
+const STAR_COUNT = 14000;
+const MIN_R = 40, MAX_R = 280;
+
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(STAR_COUNT * 3);
+const colors = new Float32Array(STAR_COUNT * 3);
+const sizes = new Float32Array(STAR_COUNT);
+
+for (let i = 0; i < STAR_COUNT; i++) {
+  const [x, y, z] = randSphereAroundRig(MIN_R, MAX_R);
+  positions[i * 3 + 0] = x;
+  positions[i * 3 + 1] = y;
+  positions[i * 3 + 2] = z;
+
+  const blueish = Math.random() < 0.18;
+  colors[i * 3 + 0] = blueish ? 0.8 : 1.0;
+  colors[i * 3 + 1] = blueish ? 0.9 : 1.0;
+  colors[i * 3 + 2] = 1.0;
+
+  sizes[i] = 0.8 + Math.random() * 2.6;
+}
+
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+const pointsMaterial = new THREE.PointsMaterial({
+  size: 1.2,
+  transparent: true,
+  opacity: 0.95,
+  depthWrite: false,
+  sizeAttenuation: true,
+  vertexColors: true,
+  blending: THREE.AdditiveBlending
+});
+const starPoints = new THREE.Points(geometry, pointsMaterial);
+scene.add(starPoints);
+
+// Flight model
+const vel = new THREE.Vector3();
+let yaw = 0, pitch = 0, roll = 0;
+const tmpV = new THREE.Vector3();
+
+let dampeners = true;
+const baseAccel = 18;
+const boostMul = 2.6;
+const maxSpeed = 260;
+
+// Input state
+const down = new Set();
+window.addEventListener('keydown', e => { if (!e.repeat) down.add(e.code); });
+window.addEventListener('keyup', e => { down.delete(e.code); });
+
+const mouse = { dx: 0, dy: 0 };
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === renderer.domElement) {
+    mouse.dx += e.movementX;
+    mouse.dy += e.movementY;
+  }
+});
+
+// Pointer lock UI (assumes elements exist in your HTML)
+const centerEl = document.getElementById('center');
+const enterBtn = document.getElementById('enterBtn');
+if (enterBtn) enterBtn.addEventListener('click', () => { renderer.domElement.requestPointerLock(); centerEl && (centerEl.style.display = 'none'); });
+renderer.domElement.addEventListener('click', () => { if (!document.pointerLockElement) renderer.domElement.requestPointerLock(); });
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== renderer.domElement) centerEl && (centerEl.style.display = 'grid'); });
+
+// Mobile twin thumbsticks (fade in handled by CSS + pointer events in HTML)
+const leftStickEl = document.getElementById('leftStick');
+const rightStickEl = document.getElementById('rightStick');
+const leftKnob = document.getElementById('leftKnob');
+const rightKnob = document.getElementById('rightKnob');
+
+let lTouchId = null, rTouchId = null;
+let leftOrigin = { x: 120, y: innerHeight - 140 }, rightOrigin = { x: innerWidth - 120, y: innerHeight - 140 };
+let leftVec = { x: 0, y: 0 }, rightVec = { x: 0, y: 0 };
+let leftAsc = 0;
+const STICK_RADIUS = 56;
+
+const showStick = (el, x, y) => {
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+  el.classList.add('visible');
+};
+const hideStick = el => el.classList.remove('visible');
+
+window.addEventListener('touchstart', ev => {
+  for (const t of ev.changedTouches) {
+    const tx = t.clientX, ty = t.clientY;
+    if (tx < innerWidth * 0.5 && lTouchId === null) {
+      lTouchId = t.identifier;
+      leftOrigin = { x: tx, y: ty };
+      leftVec.x = leftVec.y = 0;
+      leftAsc = 0;
+      leftStickEl && showStick(leftStickEl, tx + 'px', ty + 'px');
+    } else if (tx >= innerWidth * 0.5 && rTouchId === null) {
+      rTouchId = t.identifier;
+      rightOrigin = { x: tx, y: ty };
+      rightVec.x = rightVec.y = 0;
+      rightStickEl && showStick(rightStickEl, tx + 'px', ty + 'px');
+    }
+  }
+}, { passive: false });
+
+window.addEventListener('touchmove', ev => {
+  ev.preventDefault();
+  for (const t of ev.changedTouches) {
+    if (t.identifier === lTouchId && leftStickEl) {
+      const dx = t.clientX - leftOrigin.x;
+      const dy = t.clientY - leftOrigin.y;
+      const nx = Math.max(-1, Math.min(1, dx / STICK_RADIUS));
+      const ny = Math.max(-1, Math.min(1, dy / STICK_RADIUS));
+      leftVec.x = nx;
+      leftVec.y = -ny; // forward is -Y in touch coordinate mapping used earlier
+      leftKnob && (leftKnob.style.transform = `translate(${nx * STICK_RADIUS}px, ${ny * STICK_RADIUS}px)`);
+    } else if (t.identifier === rTouchId && rightStickEl) {
+      const dx = t.clientX - rightOrigin.x;
+      const dy = t.clientY - rightOrigin.y;
+      const nx = Math.max(-1, Math.min(1, dx / STICK_RADIUS));
+      const ny = Math.max(-1, Math.min(1, dy / STICK_RADIUS));
+      rightVec.x = nx;
+      rightVec.y = -ny;
+      rightKnob && (rightKnob.style.transform = `translate(${nx * STICK_RADIUS}px, ${ny * STICK_RADIUS}px)`);
+    }
+  }
+}, { passive: false });
+
+window.addEventListener('touchend', ev => {
+  for (const t of ev.changedTouches) {
+    if (t.identifier === lTouchId) {
+      lTouchId = null; leftVec.x = leftVec.y = 0; leftAsc = 0; leftStickEl && hideStick(leftStickEl); leftKnob && (leftKnob.style.transform = '');
+    }
+    if (t.identifier === rTouchId) {
+      rTouchId = null; rightVec.x = rightVec.y = 0; rightStickEl && hideStick(rightStickEl); rightKnob && (rightKnob.style.transform = '');
+    }
+  }
+}, { passive: false });
+
+// small dedicated ascend/descend UI (if present)
+const leftUpBtn = document.getElementById('leftUp');
+const leftDownBtn = document.getElementById('leftDown');
+if (leftUpBtn) { leftUpBtn.addEventListener('touchstart', e => { e.preventDefault(); leftAsc = 1; }); leftUpBtn.addEventListener('touchend', e => { e.preventDefault(); leftAsc = 0; }); }
+if (leftDownBtn) { leftDownBtn.addEventListener('touchstart', e => { e.preventDefault(); leftAsc = -1; }); leftDownBtn.addEventListener('touchend', e => { e.preventDefault(); leftAsc = 0; }); }
+
+// Gamepad support
+let gamepadConnected = false;
+const gpState = { analogMoveX: 0, analogMoveY: 0, analogLookX: 0, analogLookY: 0, lt: 0, rt: 0, lb: false, rb: false, aPrev: false, bPrev: false };
+
+window.addEventListener('gamepadconnected', () => { gamepadConnected = true; });
+window.addEventListener('gamepaddisconnected', () => { gamepadConnected = false; });
+
+const pollGamepad = () => {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) {
+    if (!p) continue;
+    // axes mapping: [LSx, LSy, RSx, RSy...], but this varies, we use common positions
+    const ax = p.axes || [];
+    let lsx = ax[0] || 0, lsy = ax[1] || 0, rsx = ax[2] || 0, rsy = ax[3] || 0;
+    // deadzone
+    lsx = Math.abs(lsx) > 0.06 ? lsx : 0;
+    lsy = Math.abs(lsy) > 0.06 ? lsy : 0;
+    rsx = Math.abs(rsx) > 0.06 ? rsx : 0;
+    rsy = Math.abs(rsy) > 0.06 ? rsy : 0;
+    gpState.analogMoveX = lsx;
+    gpState.analogMoveY = -lsy;
+    gpState.analogLookX = rsx;
+    gpState.analogLookY = -rsy;
+    const btn = p.buttons || [];
+    gpState.lt = (btn[6] && btn[6].value) || 0;
+    gpState.rt = (btn[7] && btn[7].value) || 0;
+    gpState.lb = !!(btn[4] && btn[4].pressed);
+    gpState.rb = !!(btn[5] && btn[5].pressed);
+    // A = toggle dampeners on press
+    if (btn[0] && btn[0].pressed && !gpState.aPrev) dampeners = !dampeners;
+    gpState.aPrev = !!(btn[0] && btn[0].pressed);
+    // B = reset velocity
+    if (btn[1] && btn[1].pressed && !gpState.bPrev) vel.set(0, 0, 0);
+    gpState.bPrev = !!(btn[1] && btn[1].pressed);
+    // use first connected
+    return;
+  }
+};
+
+// Apply inputs to the flight model (true 6-DoF: W/thrust follows the camera forward vector)
+const applyInput = (dt) => {
+  // Look: combine mouse, right thumb, gamepad right stick
+  const lookSensitivity = 0.0019;
+  const lookDX = (mouse.dx) + (rightVec.x * 30) + (gpState.analogLookX * 28);
+  const lookDY = (mouse.dy) + (rightVec.y * 30) + (gpState.analogLookY * 28);
+  yaw = (yaw - lookDX * lookSensitivity) % (Math.PI * 2);
+  pitch = THREE.MathUtils.clamp(pitch - lookDY * lookSensitivity, -Math.PI / 2 + 0.001, Math.PI / 2 - 0.001);
+  mouse.dx = mouse.dy = 0;
+
+  // roll
+  if (down.has('KeyQ') || gpState.lb) roll -= 1.8 * dt;
+  if (down.has('KeyE') || gpState.rb) roll += 1.8 * dt;
+
+  // orientation
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
+  rig.quaternion.copy(q);
+
+  // direction basis in world space
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+
+  // throttle
+  const boost = (down.has('ShiftLeft') || down.has('ShiftRight') || gpState.rt > 0.3) ? boostMul : 1.0;
+  const accel = baseAccel * boost;
+
+  // keyboard
+  if (down.has('KeyW')) vel.addScaledVector(forward, accel * dt);
+  if (down.has('KeyS')) vel.addScaledVector(forward, -accel * dt);
+  if (down.has('KeyA')) vel.addScaledVector(right, -accel * dt);
+  if (down.has('KeyD')) vel.addScaledVector(right, accel * dt);
+  if (down.has('Space')) vel.addScaledVector(up, accel * dt);
+  if (down.has('ControlLeft') || down.has('ControlRight')) vel.addScaledVector(up, -accel * dt);
+
+  // mobile left stick
+  if (Math.abs(leftVec.x) > 0.02) vel.addScaledVector(right, leftVec.x * accel * dt);
+  if (Math.abs(leftVec.y) > 0.02) vel.addScaledVector(forward, leftVec.y * accel * dt);
+  if (leftAsc !== 0) vel.addScaledVector(up, leftAsc * accel * dt);
+
+  // gamepad left stick
+  if (Math.abs(gpState.analogMoveX) > 0.02) vel.addScaledVector(right, gpState.analogMoveX * accel * dt);
+  if (Math.abs(gpState.analogMoveY) > 0.02) vel.addScaledVector(forward, gpState.analogMoveY * accel * dt);
+
+  // triggers fine control (LT reverse, RT forward)
+  if (gpState.lt > 0.05) vel.addScaledVector(forward, -gpState.lt * accel * dt);
+  if (gpState.rt > 0.05) vel.addScaledVector(forward, gpState.rt * accel * dt);
+
+  // dampeners
+  if (dampeners) {
+    const damping = 1.1;
+    vel.multiplyScalar(Math.max(0, 1 - damping * dt));
+  }
+
+  // speed cap
+  const speed = vel.length();
+  if (speed > maxSpeed) vel.multiplyScalar(maxSpeed / speed);
+
+  // integrate
+  rig.position.addScaledVector(vel, dt);
+};
+
+// Recycle stars that moved too far from the rig — respawn them in a shell around the rig using the single helper
+const recycleStars = () => {
+  const arr = geometry.attributes.position.array;
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const ix = i * 3;
+    const dx = arr[ix + 0] - rig.position.x;
+    const dy = arr[ix + 1] - rig.position.y;
+    const dz = arr[ix + 2] - rig.position.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > MAX_R * MAX_R) {
+      const [x, y, z] = randSphereAroundRig(MIN_R * 0.75, MAX_R);
+      arr[ix + 0] = x;
+      arr[ix + 1] = y;
+      arr[ix + 2] = z;
+    }
+  }
+  geometry.attributes.position.needsUpdate = true;
+};
+
+// Loop & HUD (assumes #stats exists)
+const statsEl = document.getElementById('stats');
+let last = performance.now(), running = true, haveGP = false;
+const frame = (now) => {
+  const dt = Math.min(0.06, (now - last) / 1000);
+  last = now;
+  pollGamepad();
+  applyInput(dt);
+  recycleStars();
+  renderer.render(scene, camera);
+  if (statsEl) statsEl.innerHTML = `Speed: <b>${vel.length().toFixed(1)}</b> u/s<br>Pos: ${rig.position.x.toFixed(1)}, ${rig.position.y.toFixed(1)}, ${rig.position.z.toFixed(1)}<br>Yaw/Pitch/Roll: ${yaw.toFixed(2)} / ${pitch.toFixed(2)} / ${roll.toFixed(2)}<br>Stars: ${STAR_COUNT}${gamepadConnected ? ' • Gamepad' : ''}`;
+  if (running) requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+
+// Hotkeys
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') document.exitPointerLock?.();
+  if (e.code === 'KeyF') dampeners = !dampeners;
+  if (e.code === 'KeyR') vel.set(0, 0, 0);
+  if (e.code === 'KeyP') {
+    // small burst
+    for (let i = 0; i < 1200; i++) {
+      const idx = (Math.random() * STAR_COUNT) | 0;
+      const [x, y, z] = randSphereAroundRig(MIN_R, MAX_R);
+      geometry.attributes.position.array[idx * 3 + 0] = x;
+      geometry.attributes.position.array[idx * 3 + 1] = y;
+      geometry.attributes.position.array[idx * 3 + 2] = z;
+    }
+    geometry.attributes.position.needsUpdate = true;
+  }
+});
+
+// Resize
+window.addEventListener('resize', () => {
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+// Pause/Resume on blur/focus
+window.addEventListener('blur', () => { running = false; });
+window.addEventListener('focus', () => { if (!running) { running = true; last = performance.now(); requestAnimationFrame(frame); } });
+
+</script>
+</body>
+</html>
